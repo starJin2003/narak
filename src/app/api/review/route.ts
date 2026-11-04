@@ -1,13 +1,17 @@
 import { reviewResponseSchema, type ReviewResponse } from "@/lib/review-contract";
+import { getModelApiKey } from "@/server/config";
 import { parseReviewInput } from "@/server/input";
 import { reviewWithMeta } from "@/server/meta";
 import { invalidInput, ReviewError } from "@/server/review-error";
 import { createReviewDiagnostics } from "@/server/review-diagnostics";
+import { fitReviewResponse } from "@/server/transport";
+import { clientKey, requestGuard } from "@/server/request-guard";
 
 export const runtime = "nodejs";
-// Vercel Fluid Compute supports 300 seconds on Hobby. Keep the review's own
-// deadline shorter so it can return an explicit incomplete response first.
-export const maxDuration = 210;
+// Vercel Fluid Compute allows 300 seconds on Hobby. The review's own 230 second deadline,
+// which leaves room for one research retry, plus 10 seconds of upload reading stays under
+// this limit, so the route can still return an explicit incomplete response first.
+export const maxDuration = 250;
 
 function respond(body: ReviewResponse, status: number) {
   return Response.json(reviewResponseSchema.parse(body), {
@@ -19,8 +23,11 @@ function respond(body: ReviewResponse, status: number) {
 export async function POST(request: Request) {
   const diagnostics = createReviewDiagnostics();
   function finish(body: ReviewResponse, status: number) {
-    const response = respond(body, status);
-    diagnostics.finish(body);
+    // A completed result that cannot fit the hosting response limit fails closed here.
+    const fitted = fitReviewResponse(body);
+    if (fitted !== body && fitted.state === "failed") { diagnostics.fail("response_too_large"); status = 502; }
+    const response = respond(fitted, status);
+    diagnostics.finish(fitted);
     return response;
   }
   try {
@@ -34,11 +41,19 @@ export async function POST(request: Request) {
     }
     const inputSignal = AbortSignal.any([request.signal, AbortSignal.timeout(10_000)]);
     const input = await parseReviewInput(request, inputSignal);
-    const result = await reviewWithMeta(input, { signal: request.signal, diagnostics });
-    const status = result.state === "completed" || result.state === "incomplete" ? 200
-      : result.issue.code === "rate_limit" ? 429
-      : result.state === "unavailable" ? 503 : 502;
-    return finish(result, status);
+    // Only a request that will spend Meta credits counts against the request bounds.
+    const admitted = getModelApiKey() ? requestGuard.admit("review", clientKey(request)) : null;
+    if (admitted && "issue" in admitted) {
+      diagnostics.fail("request_rate_limited");
+      return finish({ state: "unavailable", result: null, issue: admitted.issue }, 429);
+    }
+    try {
+      const result = await reviewWithMeta(input, { signal: request.signal, diagnostics });
+      const status = result.state === "completed" || result.state === "incomplete" ? 200
+        : result.issue.code === "rate_limit" ? 429
+        : result.state === "unavailable" ? 503 : 502;
+      return finish(result, status);
+    } finally { admitted?.release(); }
   } catch (error) {
     if (error instanceof ReviewError) {
       diagnostics.fail("invalid_input"); return finish(error.toResponse(), error.httpStatus);

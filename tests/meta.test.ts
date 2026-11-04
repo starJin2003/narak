@@ -17,6 +17,23 @@ function reviewWithMeta(value: ReviewInput, options: MetaOptions = {}) {
 beforeEach(() => vi.spyOn(console, "info").mockImplementation(() => undefined));
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+describe("production model settings", () => {
+  const bodies = (fetcher: ReturnType<typeof fetchSequence>) => fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+
+  it("runs research with effort unset and the assessment at low effort, both on Muse Spark", async () => {
+    const fetcher = fetchSequence(researchResponse(), assessmentResponse());
+    await reviewWithMeta(input, { apiKey: "k", fetcher });
+    const [research, assessed] = bodies(fetcher);
+    expect([research.model, assessed.model]).toEqual(["muse-spark-1.3", "muse-spark-1.3"]);
+    expect("reasoning" in research).toBe(false);
+    expect(assessed.reasoning).toEqual({ effort: "low" });
+    expect(research.tools).toEqual([{ type: "web_search", search_context_size: "medium" }]);
+    expect(assessed.text.format).toMatchObject({ type: "json_schema", strict: true });
+    expect([research.max_output_tokens, assessed.max_output_tokens]).toEqual([8_000, 8_000]);
+    expect(JSON.stringify(bodies(fetcher))).not.toContain("muse-wonder");
+  });
+});
+
 describe("Meta review adapter", () => {
   it("uses the documented endpoint and two stateless calls, preserving citation metadata", async () => {
     const fetcher = fetchSequence(researchResponse(), assessmentResponse());
@@ -60,46 +77,52 @@ describe("Meta review adapter", () => {
     expect(result.result.limitations.length).toBeGreaterThanOrEqual(3);
   });
 
+  // Only an unfinished search, an incomplete envelope or missing citations is retried, once.
   it.each([
-    ["skipped search", { search: false }, "retrieval_incomplete"],
-    ["no annotated evidence", { citations: false }, "insufficient_sources"],
-    ["truncated output", { status: "incomplete" }, "assessment_incomplete"],
-  ] as const)("reports %s as incomplete without an outcome", async (_, options, code) => {
-    const fetcher = fetchSequence(researchResponse(options));
+    ["skipped search", { search: false }, "retrieval_incomplete", 1],
+    ["no annotated evidence", { citations: false }, "insufficient_sources", 2],
+    ["truncated output", { status: "incomplete" }, "assessment_incomplete", 2],
+  ] as const)("reports %s as incomplete without an outcome", async (_, options, code, researchCalls) => {
+    const fetcher = fetchSequence(researchResponse(options), researchResponse(options));
     expect(await reviewWithMeta(input, { apiKey: "test", fetcher })).toMatchObject({ state: "incomplete", result: null, issue: { code } });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(researchCalls);
   });
 
   it("does not trust URLs in generated prose without annotations", async () => {
     const raw = researchResponse({ citations: false });
     const message = raw.output.find((item) => item.type === "message")!;
     message.content![0]!.text = "A claim at https://example.com/invented must not become a source.";
-    expect(await reviewWithMeta(input, { apiKey: "test", fetcher: fetchSequence(raw) })).toMatchObject({ state: "incomplete", result: null });
+    const fetcher = fetchSequence(raw, raw);
+    expect(await reviewWithMeta(input, { apiKey: "test", fetcher })).toMatchObject({ state: "incomplete", result: null, issue: { code: "insufficient_sources" } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("does not accept a failed search even with valid annotations", async () => {
     const raw = researchResponse();
     raw.output.find((item) => item.type === "web_search_call")!.status = "failed";
-    expect(await reviewWithMeta(input, { apiKey: "test", fetcher: fetchSequence(raw) })).toMatchObject({ state: "incomplete", issue: { code: "retrieval_incomplete" } });
+    const fetcher = fetchSequence(raw, raw);
+    expect(await reviewWithMeta(input, { apiKey: "test", fetcher })).toMatchObject({ state: "incomplete", issue: { code: "retrieval_incomplete" } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["in_progress", "searching", "failed"])("blocks a completed envelope with a %s search item without retry or assessment", async (status) => {
+  it.each(["in_progress", "searching", "failed"])("retries once, then blocks a completed envelope with a %s search item without assessment", async (status) => {
     const raw = researchResponse();
     // Even a duplicate ID later marked completed cannot erase an unfinished item.
     const completed = raw.output.find((item) => item.type === "web_search_call")!;
     raw.output.unshift({ type: "web_search_call", id: completed.id, status, action: { type: "search", query: "synthetic test query" }, results: [] });
-    const fetcher = fetchSequence(raw, assessmentResponse());
+    const fetcher = fetchSequence(raw, raw, assessmentResponse());
     const registryRetriever = vi.fn();
     const response = await reviewWithMeta(input, { apiKey: "test", fetcher, registryRetriever });
     expect(response).toMatchObject({ state: "incomplete", result: null, issue: { code: "retrieval_incomplete" } });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(registryRetriever).not.toHaveBeenCalled();
   });
 
-  it.each(["incomplete", "failed", "cancelled", "in_progress", "queued"])("blocks provider envelope status %s independently of the local deadline", async (status) => {
-    const fetcher = fetchSequence(researchResponse({ status }));
+  // Every non-completed envelope status is the provider_research_envelope_incomplete category.
+  it.each(["incomplete", "failed", "cancelled", "in_progress", "queued"])("retries once, then blocks provider envelope status %s", async (status) => {
+    const fetcher = fetchSequence(researchResponse({ status }), researchResponse({ status }));
     expect(await reviewWithMeta(input, { apiKey: "test", fetcher })).toMatchObject({ state: "incomplete", result: null, issue: { code: "assessment_incomplete" } });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it.each(["unknown source", "embedded URL", "invented image", "verified outcome", "invalid schema"])("rejects %s in structured assessment", async (scenario) => {
@@ -110,7 +133,10 @@ describe("Meta review adapter", () => {
     if (scenario === "invented image") value.observations[0]!.kind = "image";
     if (scenario === "verified outcome") raw = { ...value, outcome: "evidence_backed_concern" };
     if (scenario === "invalid schema") raw = { findings: "invalid" };
-    expect(await reviewWithMeta(input, { apiKey: "test", fetcher: fetchSequence(researchResponse(), assessmentResponse(raw)) })).toMatchObject({ state: "failed", result: null, issue: { code: "invalid_response" } });
+    // "verified outcome" is an extra key, rejected by the schema. Each case is retried once and still fails.
+    const fetcher = fetchSequence(researchResponse(), assessmentResponse(raw), assessmentResponse(raw));
+    expect(await reviewWithMeta(input, { apiKey: "test", fetcher })).toMatchObject({ state: "failed", result: null, issue: { code: "invalid_response" } });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("fails closed when the model says the evidence is insufficient", async () => {
@@ -210,7 +236,9 @@ describe("Meta review adapter", () => {
   it("rejects invalid JSON in the assessment response", async () => {
     const value = assessmentResponse();
     value.output[0]!.content[0]!.text = "```json\n{}\n```";
-    expect(await reviewWithMeta(input, { apiKey: "test", fetcher: fetchSequence(researchResponse(), value) })).toMatchObject({ state: "failed", issue: { code: "invalid_response" } });
+    const fetcher = fetchSequence(researchResponse(), value, value);
+    expect(await reviewWithMeta(input, { apiKey: "test", fetcher })).toMatchObject({ state: "failed", issue: { code: "invalid_response" } });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("the contract blocks verified concerns without a verified case record", async () => {

@@ -42,15 +42,19 @@ export function createLogSummary() {
         if (events.some((event, index) => event.sequence !== index + 1)) notes.push("sequence_gap");
         if (finish && events.at(-1) !== finish) notes.push("events_after_finish");
         const stages = {};
+        // One research retry adds one more research measurement, recorded with its cause.
+        const retries = events.filter((event) => event.event === "research_retried");
+        const assessmentRetries = events.filter((event) => event.event === "assessment_retried");
         for (const stage of ["research", "assessment"]) {
+          const expected = stage === "research" ? 1 + retries.length : 1 + assessmentRetries.length;
           const began = events.some((event) => event.event === "provider_started" && event.stage === stage);
           const measured = events.filter((event) => event.event === "provider_finished" && event.stage === stage);
-          if (began && measured.length !== 1) notes.push("missing_stage_data");
+          if (began && measured.length !== expected) notes.push("missing_stage_data");
           if (!began && measured.length) notes.push("missing_stage_data");
-          if (measured.length > 1) notes.push("duplicate_or_conflicting_entries");
-          const end = measured.length === 1 ? measured[0] : undefined;
+          if (measured.length > expected) notes.push("duplicate_or_conflicting_entries");
+          const end = measured.length === expected ? measured.at(-1) : undefined;
           stages[stage] = end ? {
-            state: "measured", durationMs: end.durationMs, httpStatus: end.httpStatus ?? null,
+            state: "measured", attempts: measured.length, durationMs: end.durationMs, httpStatus: end.httpStatus ?? null,
             providerStatus: end.providerStatus ?? null, searches: end.searches ?? null,
             messages: end.messages ?? null,
             citationAnnotations: end.citationAnnotations ?? null, acceptedSources: end.acceptedSources ?? null,
@@ -65,6 +69,9 @@ export function createLogSummary() {
           startedAt: start?.timestamp ?? null, state, outcome: finish?.outcome ?? null,
           totalDurationMs: finish?.durationMs ?? null, stages,
           researchCheck: events.find((event) => event.event === "research_checked")?.result ?? null,
+          researchRetries: retries.map((event) => ({ reason: event.reason, remainingMs: event.remainingMs })),
+          assessmentRetries: assessmentRetries.map((event) => ({ reason: event.reason, remainingMs: event.remainingMs })),
+          insufficientReason: events.find((event) => event.event === "assessment_insufficient")?.reason ?? null,
           registry: events.filter((event) => event.event === "registry_checked").map((event) => ({ state: event.state, selectedCases: event.selectedCases ?? null, code: event.code ?? null })),
           assessmentCheck: events.find((event) => event.event === "assessment_checked")?.result ?? null,
           categories: [...new Set(events.flatMap((event) => event.category ? [event.category] : []))],

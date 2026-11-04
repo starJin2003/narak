@@ -21,6 +21,8 @@ export function createReviewDiagnostics(write: (line: string) => void = (line) =
   return {
     emit,
     fail(category: DiagnosticCategory) { failure = category; },
+    // A retried stage that then succeeds no longer carries the first attempt's failure.
+    clearFailure() { failure = undefined; },
     get failure() { return failure; },
     finish(response: ReviewResponse) {
       if (finished) return;

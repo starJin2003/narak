@@ -20,7 +20,8 @@ try {
   execFileSync("pg_ctl", ["-D", data, "-l", directory + "/postgres.log", "-o", `-F -p ${port} -k ${socket} -c listen_addresses=127.0.0.1`, "-w", "start"], { stdio: "pipe" });
   started = true;
   console.log("Running registry tests against a disposable local PostgreSQL cluster.");
-  const testFile = process.argv.includes("--intake") ? "tests/three-case-intake.test.mjs" : "tests/knowledge-db.integration.test.ts";
+  const testFile = process.argv.includes("--intake") ? "tests/three-case-intake.test.mjs"
+    : process.argv.includes("--discovery") ? "tests/discovery-review.test.mjs" : "tests/knowledge-db.integration.test.ts";
   const result = spawnSync(process.execPath, ["node_modules/vitest/vitest.mjs", "run", testFile], { env, stdio: "inherit" });
   process.exitCode = result.status ?? 1;
 } finally {

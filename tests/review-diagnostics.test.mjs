@@ -38,15 +38,21 @@ describe("safe review diagnostics", () => {
   });
   it.each(["searching", "in_progress", "failed"])("distinguishes a completed envelope from a %s search", async (status) => {
     const raw = researchResponse(); raw.output.find((item) => item.type === "web_search_call").status = status;
-    const value = await run(sequence(raw));
+    const value = await run(sequence(raw, raw));
     expect(value.response).toMatchObject({ state: "incomplete", issue: { code: "retrieval_incomplete" } });
     expect(value.events.find((event) => event.event === "provider_finished")).toMatchObject({ providerStatus: "completed", searches: { [status]: 1 } });
-    expect(last(value).category).toBe("unfinished_search_items"); expect(value.fetcher).toHaveBeenCalledTimes(1);
-    expect(summarize(value.lines).reviews[0].stages.assessment).toEqual({ state: "not_reached", durationMs: null });
+    expect(value.events.filter((event) => event.event === "research_retried")).toEqual([expect.objectContaining({ reason: "unfinished_search_items" })]);
+    expect(last(value).category).toBe("unfinished_search_items"); expect(value.fetcher).toHaveBeenCalledTimes(2);
+    const review = summarize(value.lines).reviews[0];
+    expect(review.stages.assessment).toEqual({ state: "not_reached", durationMs: null });
+    expect(review.stages.research).toMatchObject({ state: "measured", attempts: 2 });
+    expect(review.researchRetries).toEqual([expect.objectContaining({ reason: "unfinished_search_items" })]);
+    expect(review.notes).toEqual([]);
   });
   it("classifies provider envelope incompletion without inventing accepted-source measurements", async () => {
-    const value = await run(sequence(researchResponse({ status: "incomplete" })));
+    const value = await run(sequence(researchResponse({ status: "incomplete" }), researchResponse({ status: "incomplete" })));
     expect(last(value).category).toBe("provider_research_envelope_incomplete");
+    expect(value.events.filter((event) => event.event === "research_retried")).toEqual([expect.objectContaining({ reason: "provider_research_envelope_incomplete" })]);
     const provider = value.events.find((event) => event.event === "provider_finished");
     expect(provider.providerStatus).toBe("incomplete"); expect(provider).not.toHaveProperty("acceptedSources");
   });
@@ -57,22 +63,29 @@ describe("safe review diagnostics", () => {
     expect(value.events.find((event) => event.event === "provider_finished").searches.unknown).toBe(1);
     expect(value.lines.join()).not.toContain("private-unknown-status");
   });
+  // Missing citations are retried once. Malformed citations are never retried.
   it.each([false, true])("classifies missing or malformed citations (malformed=%s)", async (malformed) => {
     const raw = researchResponse({ citations: malformed });
     if (malformed) raw.output.find((item) => item.type === "message").content[0].annotations[0].url = "javascript:private-source-content";
-    const value = await run(sequence(raw));
+    const value = await run(sequence(raw, raw));
     expect(last(value).category).toBe(malformed ? "invalid_citations" : "missing_citations");
     const provider = value.events.find((event) => event.event === "provider_finished");
     expect(provider.citationAnnotations).toBe(malformed ? 1 : 0); expect(provider.acceptedSources).toBe(0);
-    expect(value.response.state).toBe("incomplete"); expect(value.fetcher).toHaveBeenCalledTimes(1);
+    expect(value.response.state).toBe("incomplete"); expect(value.fetcher).toHaveBeenCalledTimes(malformed ? 1 : 2);
+    expect(value.events.filter((event) => event.event === "research_retried").map((event) => event.reason)).toEqual(malformed ? [] : ["missing_citations"]);
+    expect(value.lines.join()).not.toContain("private-source-content");
   });
   it.each(["schema", "source", "insufficient"])("classifies assessment %s failures", async (kind) => {
     let data = assessment();
     if (kind === "schema") data = { secretArbitraryBody: "must-not-appear" };
     if (kind === "source") data.findings[0].sourceIds = ["S-SECRET-UNKNOWN"];
     if (kind === "insufficient") data.assessmentStatus = "insufficient";
-    const value = await run(sequence(researchResponse(), assessmentResponse(data)));
-    expect(last(value).category).toBe(kind === "schema" ? "invalid_assessment" : kind === "source" ? "unknown_source_reference" : "assessment_insufficient");
+    // Invalid output is retried once with the same reply. Insufficient is not retried.
+    const value = await run(kind === "insufficient" ? sequence(researchResponse(), assessmentResponse(data)) : sequence(researchResponse(), assessmentResponse(data), assessmentResponse(data)));
+    expect(last(value).category).toBe(kind === "schema" ? "assessment_schema_invalid" : kind === "source" ? "unknown_source_reference" : "assessment_insufficient");
+    expect(value.events.filter((event) => event.event === "assessment_retried")).toHaveLength(kind === "insufficient" ? 0 : 1);
+    if (kind === "source") expect(value.events.filter((event) => event.event === "unknown_source_ids")).toEqual(Array(2).fill(expect.objectContaining({ field: "sourceIds", S: 0, R: 0, other: 1 })));
+    if (kind === "insufficient") expect(value.events.find((event) => event.event === "assessment_insufficient")).toMatchObject({ reason: "other" });
     expect(value.events.find((event) => event.event === "assessment_checked").result).toBe(kind === "insufficient" ? "insufficient" : "invalid");
     expect(value.lines.join()).not.toMatch(/must-not-appear|S-SECRET-UNKNOWN/);
   });

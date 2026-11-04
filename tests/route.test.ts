@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST, maxDuration } from "@/app/api/review/route";
-import { REVIEW_TIMEOUT_MS } from "@/lib/review-contract";
+import { RESEARCH_RESERVE_MS, REVIEW_TIMEOUT_MS } from "@/lib/review-contract";
+import { RESEARCH_RETRY_RESERVE_MS } from "@/server/meta";
 
 beforeEach(() => vi.spyOn(console, "info").mockImplementation(() => undefined));
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
@@ -14,9 +15,16 @@ function request(origin?: string, copy = "An ordinary cup of tea.") {
 
 describe("review route", () => {
   it("leaves route headroom around upload, review and client deadlines within Fluid Compute Hobby limits", () => {
-    expect(REVIEW_TIMEOUT_MS).toBe(180_000);
+    expect(REVIEW_TIMEOUT_MS).toBe(230_000);
+    // Upload reading (10 s) plus the review, then the client, then the route limit, then Hobby's 300 s.
+    expect(10_000 + REVIEW_TIMEOUT_MS).toBeLessThan(REVIEW_TIMEOUT_MS + 15_000);
     expect(REVIEW_TIMEOUT_MS + 15_000).toBeLessThan(maxDuration * 1000);
     expect(maxDuration).toBeLessThanOrEqual(300);
+    // The retry needs 140 s of the 227 s internal deadline, so a first research call of up to
+    // 87 s can still retry. That covers the 79.9 s maximum of the 2026-11-04 stop cause run but
+    // not the 89.5 s maximum of the earlier baseline, which now ends without a retry.
+    expect(RESEARCH_RETRY_RESERVE_MS).toBe(RESEARCH_RESERVE_MS + 50_000);
+    expect(REVIEW_TIMEOUT_MS - 3_000 - RESEARCH_RETRY_RESERVE_MS).toBe(87_000);
   });
   it("returns explicit unavailable status when credentials are absent", async () => {
     vi.stubEnv("MODEL_API_KEY", "");

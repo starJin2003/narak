@@ -121,7 +121,7 @@ describe("bounded contextual registry selection", () => {
 describe("registry-aware two-stage assessment", () => {
   it("passes distinct registry references only to assessment and keeps Meta annotations intact", async () => {
     const selected = select(maple);
-    const value = assessment(); value.findings[0].sourceIds = ["S1", "R1", "R3"];
+    const value = assessment(true, "Angelic Buster"); value.findings[0].sourceIds = ["S1", "R1", "R3"];
     const fetcher = fetchSequence(researchResponse(), assessmentResponse(value));
     const response = await reviewWithMeta(maple, { apiKey: "test", fetcher, registryRetriever: async () => selected });
     expect(response.state).toBe("completed");
@@ -162,8 +162,11 @@ describe("registry-aware two-stage assessment", () => {
   });
   it("rejects invented registry IDs and false verified promotion in model output and contract", async () => {
     const selected = select(maple), value = assessment(); value.findings[0].sourceIds = ["R999"];
-    const response = await reviewWithMeta(maple, { apiKey: "test", fetcher: fetchSequence(researchResponse(), assessmentResponse(value)), registryRetriever: async () => selected });
+    // The single assessment retry receives the same invented ID, so the review still fails.
+    const invented = fetchSequence(researchResponse(), assessmentResponse(value), assessmentResponse(value));
+    const response = await reviewWithMeta(maple, { apiKey: "test", fetcher: invented, registryRetriever: async () => selected });
     expect(response).toMatchObject({ state: "failed", issue: { code: "invalid_response" } });
+    expect(invented).toHaveBeenCalledTimes(3);
     const valid = await reviewWithMeta(maple, { apiKey: "test", fetcher: fetchSequence(researchResponse(), assessmentResponse()), registryRetriever: async () => selected });
     expect(resultSchema.safeParse({ ...valid.result, outcome: "evidence_backed_concern", verifiedCaseIds: [selected.matchedCaseIds[0]] }).success).toBe(false);
     expect(registryContextSchema.safeParse({ ...selected, evidence: [{ ...selected.evidence[0], annotation: { type: "url_citation" } }] }).success).toBe(false);

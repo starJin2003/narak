@@ -26,9 +26,11 @@ export function researchResponse(options: { search?: boolean; citations?: boolea
   };
 }
 
-export function assessment(findings = true): Assessment {
+// copyPhrase must appear in the copy of the input a test reviews.
+export function assessment(findings = true, copyPhrase = "quiet moment"): Assessment {
   return {
     assessmentStatus: "complete",
+    insufficientReason: "none",
     observations: [{ kind: "copy", description: "The copy describes a quiet moment." }],
     findings: findings ? [{
       title: "Synthetic seasonal context",
@@ -38,6 +40,14 @@ export function assessment(findings = true): Assessment {
       counterarguments: ["An ordinary reading remains possible."],
       modelInference: "The reported context may be relevant, but the connection needs human verification.",
       sourceIds: ["S1"],
+      visualConcept: "",
+      concernType: "social_meaning",
+      reactionSourceIds: ["S1"],
+      elements: ["copy"],
+      documentedDate: { start: "", end: "" },
+      reactionKind: "reaction_to_advertisement_or_campaign",
+      visualMatch: "not_visual",
+      copyPhrase,
     }] : [],
     evidenceScope: "Only the synthetic cited test material was checked.",
     limitations: ["Synthetic fixture, not a live assessment."],

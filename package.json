@@ -17,9 +17,12 @@
     "test:e2e": "playwright test",
     "test:knowledge-db": "node scripts/test-knowledge-db.mjs",
     "knowledge:intake": "node scripts/intake-three-cases.mjs",
+    "evidence:discover": "node scripts/discover-evidence.mjs",
+    "evidence:review": "node scripts/review-discovery.mjs",
     "logs:review": "node --experimental-strip-types scripts/review-logs.mjs"
   },
   "dependencies": {
+    "@meta-sam/parser": "0.1.0",
     "next": "16.4.4",
     "pg": "^8.23.1",
     "react": "19.3.1",

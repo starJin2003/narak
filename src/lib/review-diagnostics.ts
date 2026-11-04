@@ -8,6 +8,8 @@ export const diagnosticCategorySchema = z.enum([
   "client_cancelled", "review_deadline_exceeded", "provider_authentication", "provider_quota",
   "provider_billing", "provider_timeout", "provider_transport", "provider_unavailable",
   "unsupported_provider_request", "invalid_provider_response", "missing_credentials", "invalid_input", "unexpected_internal",
+  "response_too_large", "request_rate_limited",
+  "assessment_schema_invalid", "assessment_unexpected_output", "assessment_contains_url", "observation_input_mismatch",
 ]);
 export type DiagnosticCategory = z.infer<typeof diagnosticCategorySchema>;
 const duration = z.number().int().min(0).max(600_000);
@@ -31,7 +33,23 @@ const payloadSchema = z.discriminatedUnion("event", [
   z.strictObject({ event: z.literal("research_checked"), result: z.enum(["accepted", "rejected"]), category }),
   z.strictObject({ event: z.literal("registry_checked"), state: z.enum(["available", "unavailable"]), selectedCases: z.number().int().min(0).max(3).optional(),
     code: z.enum(["not_configured", "invalid_configuration", "database_unavailable", "bounded_context_exceeded"]).optional(), category }),
-  z.strictObject({ event: z.literal("assessment_checked"), result: z.enum(["valid", "invalid", "insufficient"]), category }),
+  z.strictObject({ event: z.literal("assessment_checked"), result: z.enum(["valid", "invalid", "insufficient"]), category,
+    // Counts only. A copy observation returned for an image-only review is normalized to image.
+    observationsNormalized: count.optional(), removedOutOfScope: count.optional(), removedNoReactionSource: count.optional(), removedDateNotDocumented: count.optional(),
+    removedWeakReaction: count.optional(), removedVisualMatch: count.optional(), removedEncyclopediaOnly: count.optional(),
+    removedCopyNotGrounded: count.optional() }),
+  // Why the assessment said it could not complete. A bounded label, never the model's text.
+  z.strictObject({ event: z.literal("assessment_insufficient"), reason: z.enum(["none", "conflicting_evidence", "creative_not_assessable", "other"]) }),
+  // Source IDs an assessment named but the server never supplied, counted by field and by
+  // ID shape (S, R or other). The IDs themselves are never logged.
+  z.strictObject({ event: z.literal("unknown_source_ids"), field: z.enum(["sourceIds", "reactionSourceIds"]), S: count, R: count, other: count }),
+  // One automatic assessment retry, recorded with its cause and the time left. No content.
+  z.strictObject({ event: z.literal("assessment_retried"), reason: z.enum(["assessment_schema_invalid", "assessment_unexpected_output", "assessment_contains_url", "observation_input_mismatch", "unknown_source_reference"]), remainingMs: duration }),
+  // One automatic research retry, recorded with its cause and the time left. No content.
+  z.strictObject({ event: z.literal("research_retried"), reason: z.enum(["unfinished_search_items", "provider_research_envelope_incomplete", "missing_citations"]), remainingMs: duration }),
+  // Structural counts only. Concept text and image data never enter diagnostics.
+  z.strictObject({ event: z.literal("segmentation_checked"), state: z.enum(["not_requested", "completed", "partial", "failed"]),
+    concepts: z.number().int().min(0).max(3), regions: z.number().int().min(0).max(24), failures: z.number().int().min(0).max(3) }),
   z.strictObject({
     event: z.literal("review_finished"), durationMs: duration,
     state: z.enum(["completed", "incomplete", "unavailable", "failed"]),

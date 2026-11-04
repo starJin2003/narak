@@ -41,7 +41,14 @@ describe("server input validation", () => {
     const bytes = await sharp({ create: { width: 10, height: 10, channels: 3, background: "#dfe4d5" } }).toFormat(format).toBuffer();
     const image = new File([new Uint8Array(bytes)], `creative.${format}`, { type: `image/${format}` });
     const result = await parseReviewInput(request({ copy: "", image }), new AbortController().signal);
-    expect(result.image?.dataUrl).toBe(`data:image/${format};base64,${bytes.toString("base64")}`);
+    // The image is re-encoded to remove metadata. Format, size and pixels are kept.
+    expect(result.image?.dataUrl.startsWith(`data:image/${format};base64,`)).toBe(true);
+    const sent = Buffer.from(result.image!.dataUrl.split(",")[1]!, "base64");
+    const pixels = async (value: Buffer) => sharp(value).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const [before, after] = await Promise.all([pixels(bytes), pixels(sent)]);
+    expect([after.info.width, after.info.height]).toEqual([before.info.width, before.info.height]);
+    const difference = before.data.reduce((sum, value, index) => sum + Math.abs(value - after.data[index]!), 0) / before.data.length;
+    expect(difference).toBeLessThanOrEqual(format === "png" ? 0 : 2);
     expect(result.copy).toBe("");
   });
 
