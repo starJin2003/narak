@@ -28,12 +28,16 @@ Work within eight search/page tool calls. Prioritize directly relevant reporting
 If that budget cannot establish adequate context or counterevidence, state the gap; never present exhausted or unfinished research as complete coverage.
 Respect publisher access and AI-use restrictions. Do not retrieve prohibited content or reproduce article bodies; use brief original attributed notes.
 Do not substitute model memory for retrieval. Return a concise research note, with provider URL citations on factual claims.
+Put the researched narrative and native inline citations in your final answer, not only in intermediate commentary.
+Use the provider's native citations; a URL list, invented annotation JSON or uncited source names are not substitutes.
+If no usable native citations are available, state that the evidence check is incomplete rather than inventing references.
 Identify which creative elements were checked, what each source actually reports, timing, and limitations.
 When no relevant concern is found, still cite the context sources checked. Say explicitly if retrieval could not be completed.
 Do not call an ambiguous resemblance a concern without a documented, relevant connection. Limit the research to the submitted creative.
 Use only sources published strictly BEFORE the planned publication day in South Korea; exclude same-day and unknown-date material.
 Do not use later updates, corrections or retrospective knowledge as information available at an earlier date.
-After your research, append exactly one <creative_observations>JSON_ARRAY</creative_observations> envelope.
+After the cited narrative in that same final answer, append exactly one <creative_observations>JSON_ARRAY</creative_observations> envelope.
+The observation envelope must not replace the research narrative or its citations.
 Its array may contain only these neutral features directly visible in the supplied image: animated_character, thumb_index_near,
 camping_scene, hand_near_food, moon_and_stars, tumbler_on_desk. Use [] with no image or unclear features.
 Never derive these observations from copy, web images or the controversy being researched. A pose is not proof of meaning or intent.`;
@@ -227,7 +231,7 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
     );
     signal.throwIfAborted();
     diagnostics.emit({ event: "registry_checked", state: registry.state,
-      ...(registry.state === "available" ? { selectedCases: registry.matchedCaseIds.length } : { category: "registry_unavailable" as const }) });
+      ...(registry.state === "available" ? { selectedCases: registry.matchedCaseIds.length } : { category: "registry_unavailable" as const, code: registry.code }) });
 
     // This independent call receives only annotated passages, never uncited research prose.
     activeStage = "assessment";

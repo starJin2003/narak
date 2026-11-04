@@ -17,7 +17,8 @@ const messageSchema = z.object({
   id: z.string(),
   role: z.literal("assistant"),
   status: z.literal("completed"),
-  phase: z.string().nullish(),
+  // Meta documents commentary and final_answer; absent/null supports legacy output.
+  phase: z.enum(["commentary", "final_answer"]).nullish(),
   content: z.array(z.unknown()).max(100),
 });
 const textBlockSchema = z.object({

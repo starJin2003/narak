@@ -39,6 +39,8 @@ export function providerMetadata(raw: unknown) {
   const providerStatus = typeof status === "string" && ["completed", "incomplete", "failed", "cancelled", "in_progress", "queued"].includes(status) ? status as "completed" | "incomplete" | "failed" | "cancelled" | "in_progress" | "queued" : "unknown";
   if (!Array.isArray(record.output) || record.output.length > 200) return { providerStatus };
   const searches = { completed: 0, searching: 0, in_progress: 0, failed: 0, unknown: 0 };
+  const messages = { final: 0, commentary: 0, unknownPhase: 0 };
+  let commentaryCitations = 0, commentaryCountable = true;
   let citationAnnotations = 0, citationsCountable = true;
   for (const item of record.output) {
     if (typeof item !== "object" || item === null) continue;
@@ -51,14 +53,25 @@ export function providerMetadata(raw: unknown) {
         default: searches.unknown++;
       }
     }
-    if (item.type !== "message" || item.phase === "commentary") continue;
-    if (!Array.isArray(item.content) || item.content.length > 100) { citationsCountable = false; continue; }
+    if (item.type !== "message") continue;
+    const commentary = item.phase === "commentary";
+    if (commentary) messages.commentary++;
+    else if (item.phase === "final_answer" || item.phase == null) messages.final++;
+    else { messages.unknownPhase++; continue; }
+    if (!Array.isArray(item.content) || item.content.length > 100) {
+      if (commentary) commentaryCountable = false; else citationsCountable = false;
+      continue;
+    }
     for (const block of item.content) {
       if (!block || block.type !== "output_text") continue;
       if (block.annotations === undefined) continue;
-      if (!Array.isArray(block.annotations) || block.annotations.length > 100) { citationsCountable = false; continue; }
-      citationAnnotations += block.annotations.filter((entry: unknown) => typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "url_citation").length;
+      if (!Array.isArray(block.annotations) || block.annotations.length > 100) {
+        if (commentary) commentaryCountable = false; else citationsCountable = false;
+        continue;
+      }
+      const annotations = block.annotations.filter((entry: unknown) => typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "url_citation").length;
+      if (commentary) commentaryCitations += annotations; else citationAnnotations += annotations;
     }
   }
-  return { providerStatus, searches, ...(citationsCountable ? { citationAnnotations } : {}) };
+  return { providerStatus, searches, messages: { ...messages, ...(commentaryCountable ? { commentaryCitations } : {}) }, ...(citationsCountable ? { citationAnnotations } : {}) };
 }

@@ -25,10 +25,12 @@ const payloadSchema = z.discriminatedUnion("event", [
     httpStatus: z.number().int().min(100).max(599).optional(),
     providerStatus: z.enum(["completed", "incomplete", "failed", "cancelled", "in_progress", "queued", "unknown"]).optional(),
     searches: searchCountsSchema.optional(), citationAnnotations: count.optional(),
+    messages: z.strictObject({ final: count, commentary: count, unknownPhase: count, commentaryCitations: count.optional() }).optional(),
     acceptedSources: count.optional(), rejectedCitations: count.optional(), category,
   }),
   z.strictObject({ event: z.literal("research_checked"), result: z.enum(["accepted", "rejected"]), category }),
-  z.strictObject({ event: z.literal("registry_checked"), state: z.enum(["available", "unavailable"]), selectedCases: z.number().int().min(0).max(3).optional(), category }),
+  z.strictObject({ event: z.literal("registry_checked"), state: z.enum(["available", "unavailable"]), selectedCases: z.number().int().min(0).max(3).optional(),
+    code: z.enum(["not_configured", "invalid_configuration", "database_unavailable", "bounded_context_exceeded"]).optional(), category }),
   z.strictObject({ event: z.literal("assessment_checked"), result: z.enum(["valid", "invalid", "insufficient"]), category }),
   z.strictObject({
     event: z.literal("review_finished"), durationMs: duration,

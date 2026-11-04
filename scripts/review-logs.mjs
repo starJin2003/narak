@@ -52,6 +52,7 @@ export function createLogSummary() {
           stages[stage] = end ? {
             state: "measured", durationMs: end.durationMs, httpStatus: end.httpStatus ?? null,
             providerStatus: end.providerStatus ?? null, searches: end.searches ?? null,
+            messages: end.messages ?? null,
             citationAnnotations: end.citationAnnotations ?? null, acceptedSources: end.acceptedSources ?? null,
             rejectedCitations: end.rejectedCitations ?? null,
           } : { state: !began && notes.length === 0 && finish ? "not_reached" : "not_observed_missing_or_expired", durationMs: null };
@@ -64,7 +65,7 @@ export function createLogSummary() {
           startedAt: start?.timestamp ?? null, state, outcome: finish?.outcome ?? null,
           totalDurationMs: finish?.durationMs ?? null, stages,
           researchCheck: events.find((event) => event.event === "research_checked")?.result ?? null,
-          registry: events.filter((event) => event.event === "registry_checked").map((event) => ({ state: event.state, selectedCases: event.selectedCases ?? null })),
+          registry: events.filter((event) => event.event === "registry_checked").map((event) => ({ state: event.state, selectedCases: event.selectedCases ?? null, code: event.code ?? null })),
           assessmentCheck: events.find((event) => event.event === "assessment_checked")?.result ?? null,
           categories: [...new Set(events.flatMap((event) => event.category ? [event.category] : []))],
         };
