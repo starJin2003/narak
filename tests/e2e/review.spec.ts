@@ -62,25 +62,25 @@ async function noOverflow(page: Page) {
   const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, viewport: innerWidth }));
   expect(size.scroll).toBeLessThanOrEqual(size.viewport);
 }
-// Setup leads with the poster, so the optional copy field waits behind a closed disclosure.
+// The optional copy field is always open on setup.
+const copyField = (page: Page) => page.getByLabel("Ad copy", { exact: true });
 async function openCopy(page: Page) {
-  if (!(await page.getByLabel("Ad copy, optional").isVisible())) await page.locator(".copy-add summary").click();
-  await expect(page.getByLabel("Ad copy, optional")).toBeVisible();
+  await expect(copyField(page)).toBeVisible();
 }
 async function fillCopyReview(page: Page) {
   await openCopy(page);
-  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
+  await copyField(page).fill(koreanCopy);
   await page.getByLabel("Runs on").fill("2026-11-04");
 }
 async function fillPosterReview(page: Page) {
   await page.getByLabel("Poster image").setInputFiles({ name: "test-poster.png", mimeType: "image/png", buffer: await posterBytes() });
   await expect(page.getByAltText("Poster under review, test-poster.png")).toBeVisible();
   await openCopy(page);
-  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
+  await copyField(page).fill(koreanCopy);
   await page.getByLabel("Runs on").fill("2026-11-04");
 }
-// The edit control is the date chip in the top bar, or beside the heading on a phone.
-const editButton = (page: Page) => page.getByRole("button", { name: /Edit the creative or date/ }).filter({ visible: true }).first();
+// The edit control sits with the result's links in the left column.
+const editButton = (page: Page) => page.getByRole("button", { name: /^Edit (poster|copy) or date$/ });
 
 test("pages carry a nonce-based content security policy that the app never violates", async ({ page }) => {
   const violations: string[] = [];
@@ -122,7 +122,7 @@ test("validates missing inputs and preserves Korean copy through a real unavaila
   await page.getByRole("button", { name: "Review poster" }).click({ force: true });
   await expect(page.locator("#file-error")).toHaveText("Add a poster or ad copy to review.");
   await openCopy(page);
-  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
+  await copyField(page).fill(koreanCopy);
   await page.getByRole("button", { name: "Review copy" }).click({ force: true });
   await expect(page.locator("#date-error")).toHaveText("Choose the date this runs.");
   await expect(page.getByLabel("Runs on")).toBeFocused();
@@ -135,7 +135,7 @@ test("validates missing inputs and preserves Korean copy through a real unavaila
   await expect(page.getByRole("heading", { name: "No supported concern found", exact: true })).toHaveCount(0);
   await noViolations(page);
   await page.getByRole("button", { name: "Edit the creative", exact: true }).click();
-  await expect(page.getByLabel("Ad copy, optional")).toHaveValue(koreanCopy);
+  await expect(copyField(page)).toHaveValue(koreanCopy);
 });
 
 test("shows a valid poster and rejects unsupported, large, and corrupt files", async ({ page }) => {
@@ -195,9 +195,9 @@ test("draws SAM regions on the poster in the right place and opens the linked ev
   await page.locator(".lens").getByRole("button", { name: "Evidence" }).click();
   await expect(page.locator("#ev-title")).toBeFocused();
   await expect(page.locator(".evidence").getByRole("link", { name: /example\.com/ })).toHaveAttribute("href", "https://example.com/cited-fixture");
-  await expect(page.locator("#source-S1")).toContainText("Synthetic source fixture");
+  await expect(page.locator(".evidence .src", { hasText: "example.com" })).toContainText("Synthetic source fixture");
   await expect(page.locator(".evidence figcaption")).toHaveText("Outline by SAM 3.1");
-  await page.locator(".evidence").getByText("Citation trace", { exact: true }).click();
+  await page.locator(".evidence").getByText("Original text and citation trace", { exact: true }).click();
   await expect(page.getByText("response_fixture", { exact: true })).toBeVisible();
   await noViolations(page);
   await page.keyboard.press("Escape");
@@ -206,7 +206,7 @@ test("draws SAM regions on the poster in the right place and opens the linked ev
   // Editing moves focus to the date field on the next tick. Waiting for it keeps the fill below
   // from racing that focus change, and checks the focus handoff itself.
   await expect(page.getByLabel("Runs on")).toBeFocused();
-  await page.getByLabel("Ad copy, optional").fill(`${koreanCopy} revised`);
+  await copyField(page).fill(`${koreanCopy} revised`);
   await page.getByLabel("Runs on").fill("2026-12-12");
   await page.getByRole("button", { name: "Review again" }).click();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
@@ -268,8 +268,9 @@ test("registry references remain distinct from provider citations and keep their
   };
   await page.route("**/api/review", (route) => route.fulfill({ json: response }));
   await page.goto("/"); await fillCopyReview(page); await page.getByRole("button", { name: "Review copy" }).click();
-  // The finding's label follows the server rule: an emerging case backs an emerging signal.
-  await expect(page.locator(".lens .pill")).toHaveText("Emerging signal");
+  // Every finding has the same basis as the outcome, so no label repeats the heading. The
+  // basis note still names it.
+  await expect(page.locator(".lens .pill")).toHaveCount(0);
   await expect(page.locator(".lens")).toContainText("Backed by a documented case that no person has verified yet.");
   await page.locator(".lens").getByRole("button", { name: "Evidence" }).click();
   // The registry note keeps its own kind, publisher and attribution, apart from the web citation.
@@ -282,7 +283,8 @@ test("registry references remain distinct from provider citations and keep their
   const record = page.locator(".evidence .src", { hasText: "Synthetic registry fixture" });
   await expect(record).toContainText("Emerging case");
   await expect(record).not.toContainText("Character span");
-  await expect(page.locator("#source-S1")).toContainText("Unverified web citation");
+  await expect(page.locator(".evidence .group-label").first()).toHaveText("Web pages cited by Muse Spark. No person has verified them.");
+  await expect(page.locator(".evidence")).not.toContainText("Unverified web citation");
   // The source trail names publishers and hosts, never internal S or R identifiers.
   await expect(page.locator(".evidence .voice .k")).not.toContainText([/\b[SR][0-9]+\b/]);
   await record.getByText("Registry record", { exact: true }).click();
@@ -304,8 +306,8 @@ test("cancellation restores editing and ignores a late response", async ({ page 
   await expect(page.getByText("You stopped this review before it finished.", { exact: false })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Edit the creative", exact: true }).click();
-  await expect(page.getByLabel("Ad copy, optional")).toBeEnabled();
-  await expect(page.getByLabel("Ad copy, optional")).toHaveValue(koreanCopy);
+  await expect(copyField(page)).toBeEnabled();
+  await expect(copyField(page)).toHaveValue(koreanCopy);
 });
 
 test("network errors and reduced motion are handled", async ({ page }) => {
@@ -448,15 +450,17 @@ test("source counts separate passages, pages and documented notes, and copy lang
   await page.route("**/api/review", (route) => route.fulfill({ json: response }));
   await page.goto("/");
   await openCopy(page);
-  await page.getByLabel("Ad copy, optional").fill("A quiet camping night with friends");
+  await copyField(page).fill("A quiet camping night with friends");
   await page.getByLabel("Runs on").fill("2026-11-04");
   await page.getByRole("button", { name: "Review copy" }).click();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
   await expect(page.locator(".copy-card p")).not.toHaveAttribute("lang", /.+/);
-  await page.getByText("About this outcome").click();
-  await expect(page.locator(".about")).toContainText("Cited web pages1 from 2 cited passages");
-  await page.getByRole("button", { name: "All evidence" }).click();
+  await page.getByRole("button", { name: "Scope and all evidence" }).click();
+  await expect(page.locator(".evidence .facts")).toContainText("Cited web pages1, 2 passages");
   await expect(page.locator(".evidence")).toContainText("2 cited passages from 1 page on 1 site.");
+  // Both passages sit under their one page, which names its host and title once.
+  await expect(page.locator(".evidence .src", { hasText: "example.com" })).toHaveCount(1);
+  await expect(page.locator(".evidence .src .passages li")).toHaveCount(2);
   await expect(page.locator(".copy-reviewed")).toHaveAttribute("tabindex", "0");
   await noViolations(page);
   await page.keyboard.press("Escape");
@@ -466,20 +470,19 @@ test("source counts separate passages, pages and documented notes, and copy lang
   await expect(page.locator(".copy-card p")).toHaveAttribute("lang", "ko");
 });
 
-test("setup leads with the poster and keeps optional ad copy behind a closed disclosure", async ({ page }) => {
+test("setup leads with the poster and always shows the optional ad copy field", async ({ page }) => {
   await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04") }));
   await page.goto("/");
-  const summary = page.locator(".copy-add summary");
-  await expect(summary).toHaveText("Add ad copy");
-  await expect(page.getByLabel("Ad copy, optional")).toBeHidden();
-  // The poster input comes before the copy disclosure in reading and tab order.
-  expect(await page.evaluate(() => Boolean(document.getElementById("poster-file")!.compareDocumentPosition(document.querySelector(".copy-add")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  await expect(page.locator(".copy-add, .copy-field details")).toHaveCount(0);
+  await expect(copyField(page)).toBeVisible();
+  await expect(page.locator(".copy-field .optional")).toHaveText("Optional");
+  await expect(copyField(page)).toHaveAccessibleDescription(/Optional/);
+  await expect(page.locator("#copy-count")).toHaveText("0 / 5,000");
+  // The poster input comes before the copy field in reading and tab order.
+  expect(await page.evaluate(() => Boolean(document.getElementById("poster-file")!.compareDocumentPosition(document.getElementById("copy")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   await expect(page.getByText("Your poster goes to Meta when you review, with any ad copy you add.").filter({ visible: true })).toHaveCount(1);
-  await summary.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByLabel("Ad copy, optional")).toBeVisible();
-  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
-  await expect(summary).toHaveText("Ad copy added");
+  await copyField(page).fill(koreanCopy);
+  await expect(page.locator("#copy-count")).toHaveText(`${koreanCopy.length} / 5,000`);
   await page.getByLabel("Runs on").fill("2026-11-04");
   await page.getByRole("button", { name: "Review copy" }).click();
   await expect(page.locator(".copy-card")).toContainText(koreanCopy);
@@ -492,8 +495,8 @@ test("the ported studio paints its grain and review rim without breaking the con
   const held = new Promise<void>((resolve) => { release = resolve; });
   await page.route("**/api/review", async (route) => { await held; await route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }); });
   await page.goto("/");
-  const grain = await page.evaluate(() => { const style = getComputedStyle(document.body, "::before"); return { image: style.backgroundImage, opacity: style.opacity, z: style.zIndex, isolation: getComputedStyle(document.body).isolation }; });
-  expect(grain).toMatchObject({ opacity: "0.05", z: "-1", isolation: "isolate" });
+  const grain = await page.evaluate(() => { const style = getComputedStyle(document.body, "::after"); return { image: style.backgroundImage, opacity: style.opacity, z: style.zIndex, position: style.position, isolation: getComputedStyle(document.body).isolation }; });
+  expect(grain).toMatchObject({ opacity: "0.05", z: "-1", position: "fixed", isolation: "isolate" });
   expect(grain.image).toContain("feTurbulence");
   await fillPosterReview(page);
   await page.getByRole("button", { name: "Review poster" }).click();
@@ -508,14 +511,17 @@ test("the ported studio paints its grain and review rim without breaking the con
   expect(violations).toEqual([]);
 });
 
-test("every studio state passes automated checks at 1440, 1024, 390 and 320 pixels", async ({ page }, testInfo) => {
+test("every studio state passes automated checks at 2560, 1920, 1440, 1024, 390 and 320 pixels", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "This test sets each width itself.");
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
   await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }));
   await page.route("**/api/variant", async (route) => route.fulfill({ json: await fixtureVariant() }));
-  for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [320, 640]] as const) {
+  for (const [width, height] of [[2560, 1440], [1920, 1080], [1440, 900], [1024, 768], [390, 844], [320, 640]] as const) {
     await page.setViewportSize({ width, height });
     const check = async (state: string) => {
+      // Each state is checked once it has settled: entrance and fade animations have ended.
+      await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"
+        || animation.effect?.getTiming().iterations === Infinity));
       await noOverflow(page);
       await noViolations(page);
       if (width > 900) return;
@@ -537,8 +543,16 @@ test("every studio state passes automated checks at 1440, 1024, 390 and 320 pixe
     await check("result");
     await page.locator(".lens").getByRole("button", { name: "Evidence", exact: true }).click();
     await expect(page.locator("#ev-title")).toBeFocused();
+    // The card behind the panel finishes fading before the state is checked.
+    await expect.poll(() => page.locator(".right").evaluate((element) => getComputedStyle(element).visibility)).toBe("hidden");
     await check("evidence");
     await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Scope and all evidence" }).click();
+    await expect(page.locator("#ev-title")).toBeFocused();
+    await expect.poll(() => page.locator(".right").evaluate((element) => getComputedStyle(element).visibility)).toBe("hidden");
+    await check("overview");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.locator(".right").evaluate((element) => getComputedStyle(element).visibility)).toBe("visible");
     await page.getByRole("button", { name: "Test a variant" }).click();
     await page.getByLabel("What should change?").fill("Replace it with a paper cup");
     await page.getByRole("button", { name: "Make variant" }).click();
@@ -547,21 +561,20 @@ test("every studio state passes automated checks at 1440, 1024, 390 and 320 pixe
   }
 });
 
-test("long poster file names truncate visibly and stay available in full", async ({ page }) => {
+test("long poster file names truncate visibly beside the poster and never reach the top bar", async ({ page }) => {
   await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }));
   const name = `${"summer-night-camping-campaign-final-approved-version-".repeat(4)}poster.png`;
   await page.goto("/");
   await page.getByLabel("Poster image").setInputFiles({ name, mimeType: "image/png", buffer: await posterBytes() });
   await expect(page.getByAltText(`Poster under review, ${name}`)).toBeVisible();
+  const label = page.locator(".frame-tools .file");
+  await expect(label).toHaveAttribute("title", name);
+  await expect(label).toHaveText(name);
+  expect(await label.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
   await page.getByLabel("Runs on").fill("2026-11-04");
   await page.getByRole("button", { name: "Review poster" }).click();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
-  const label = page.locator(".obj .name");
-  if (await label.isVisible()) {
-    await expect(label).toHaveAttribute("title", name);
-    await expect(label).toHaveText(name);
-    expect(await label.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
-  }
+  await expect(page.locator(".top")).not.toContainText("summer-night");
   await noOverflow(page);
   await noViolations(page);
 });
@@ -570,13 +583,14 @@ test("a past planned date runs as a clearly labeled retrospective review", async
   await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2021-05-11") }));
   await page.goto("/");
   await openCopy(page);
-  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
+  await copyField(page).fill(koreanCopy);
   await page.getByLabel("Runs on").fill("2021-05-11");
   await expect(page.locator("#date-note")).toContainText("A past date makes this a retrospective review.");
   await page.getByRole("button", { name: "Review copy" }).click();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
-  await expect(page.locator(".retro .pill")).toHaveText("Retrospective review");
-  await expect(page.locator(".retro")).toContainText("Documented cases count only if they were reported before that day.");
+  await expect(page.locator(".when .pill")).toHaveText("Retrospective review");
+  await page.getByRole("button", { name: "Scope and all evidence" }).click();
+  await expect(page.locator(".evidence .retro-note")).toContainText("Documented cases count only if they were reported before that day.");
   await noViolations(page);
 });
 
@@ -587,5 +601,394 @@ test("a future planned date shows no retrospective label", async ({ page }) => {
   await page.getByLabel("Runs on").fill("2099-01-05");
   await page.getByRole("button", { name: "Review copy" }).click();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
-  await expect(page.locator(".retro")).toHaveCount(0);
+  await expect(page.locator(".when .pill")).toHaveCount(0);
+});
+
+// A streamed /api/review reply the test feeds line by line. The page's fetch returns a
+// ReadableStream, so stage events arrive one at a time, as they do from the route.
+async function streamStub(page: Page) {
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window);
+    const w = window as unknown as { __push: (line: string) => void; __end: () => void; __cancelled: boolean; __requests: number };
+    w.__cancelled = false; w.__requests = 0;
+    window.fetch = async (input, init) => {
+      if (!String(input instanceof Request ? input.url : input).includes("/api/review")) return original(input, init);
+      w.__requests += 1;
+      let control: ReadableStreamDefaultController<Uint8Array> | null = null;
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({ start(value) { control = value; }, cancel() { w.__cancelled = true; } });
+      w.__push = (line) => { try { control?.enqueue(encoder.encode(`${line}\n`)); } catch { /* closed */ } };
+      w.__end = () => { try { control?.close(); } catch { /* closed */ } };
+      // An aborted fetch closes the connection and errors its body, as a browser does.
+      init?.signal?.addEventListener("abort", () => { w.__cancelled = true; try { control?.error(new DOMException("Aborted", "AbortError")); } catch { /* closed */ } });
+      return new Response(stream, { status: 200, headers: { "content-type": "application/x-ndjson; charset=utf-8" } });
+    };
+  });
+  const push = (value: unknown) => page.evaluate((line) => (window as unknown as { __push: (line: string) => void }).__push(line), typeof value === "string" ? value : JSON.stringify(value));
+  const end = () => page.evaluate(() => (window as unknown as { __end: () => void }).__end());
+  const progress = (event: Record<string, unknown>) => push({ type: "progress", event });
+  return { push, end, progress, open: () => push(`${JSON.stringify({ type: "open" })}${" ".repeat(1100)}`) };
+}
+
+// The step list that a review marks: the left column on wide screens, a disclosure on phones.
+async function reviewSteps(page: Page) {
+  const narrow = (page.viewportSize()?.width ?? 0) <= 900;
+  if (narrow) {
+    const disclosure = page.locator(".how-narrow");
+    await expect(disclosure).toBeVisible();
+    if (!(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open))) await disclosure.locator("summary").click();
+    return disclosure.locator(".step");
+  }
+  await expect(page.locator(".how-wide")).toBeVisible();
+  return page.locator(".how-wide .step");
+}
+const STEP_NAMES = ["Poster and date", "Cited web research", "Documented cases", "Assessment and evidence checks", "Regions", "Optional variant test"];
+
+test("how a review works lists the six steps on setup, as a disclosure below the poster on phones", async ({ page }) => {
+  await page.goto("/");
+  const narrow = (page.viewportSize()?.width ?? 0) <= 900;
+  if (narrow) {
+    await expect(page.locator(".how-wide")).toBeHidden();
+    await expect(page.locator(".how-narrow")).not.toHaveAttribute("open", /.*/);
+    const frame = await page.locator(".frame").boundingBox(), disclosure = await page.locator(".how-narrow").boundingBox();
+    expect(disclosure!.y).toBeGreaterThan(frame!.y + frame!.height);
+  } else await expect(page.getByRole("heading", { name: "How a review works" })).toBeVisible();
+  const steps = await reviewSteps(page);
+  await expect(steps.locator("b")).toHaveText(STEP_NAMES);
+  await expect(steps.locator("small")).toHaveText(["Your upload", "Muse Spark", "NARAK registry", "Muse Spark and server rules", "SAM 3.1", "Muse Image"]);
+  // On setup nothing is marked, and no step claims a result or a rate.
+  await expect(steps.filter({ has: page.locator(".note") })).toHaveCount(0);
+  await expect(page.locator(".how-wide, .how-narrow").filter({ visible: true })).not.toContainText(/%|accura|guarantee/i);
+  await noViolations(page);
+});
+
+test("streams real stage events into the steps in order, announces them politely and ends on the result", async ({ page }) => {
+  const stream = await streamStub(page);
+  await page.goto("/");
+  await fillPosterReview(page);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Reviewing the poster" })).toBeVisible();
+  const steps = await reviewSteps(page);
+  const classes = async () => (await steps.evaluateAll((items) => items.map((item) => item.className.replace("step", "").trim())));
+  expect(await classes()).toEqual(["active", "idle", "idle", "idle", "idle", "idle"]);
+  await stream.open();
+  await stream.progress({ stage: "research_started" });
+  await expect.poll(classes).toEqual(["done", "active", "idle", "idle", "idle", "idle"]);
+  await expect(page.getByRole("status")).toHaveText("Web research started. Muse Spark searches the web and cites the pages it uses.");
+  await stream.progress({ stage: "research_retried" });
+  await expect(steps.nth(1)).toContainText("Running again after a retry");
+  await stream.progress({ stage: "research_accepted", pages: 4 });
+  await expect(steps.nth(1)).toContainText("4 pages cited, after one retry");
+  await expect.poll(classes).toEqual(["done", "done", "active", "idle", "idle", "idle"]);
+  await stream.progress({ stage: "cases_checked", checked: 3, selected: 1 });
+  await expect(steps.nth(2)).toContainText("3 checked, 1 selected");
+  await stream.progress({ stage: "assessment_started" });
+  await expect.poll(classes).toEqual(["done", "done", "done", "active", "idle", "idle"]);
+  await stream.progress({ stage: "assessment_checked" });
+  await stream.progress({ stage: "regions_started", elements: 2 });
+  await expect(steps.nth(4)).toContainText("Locating 2 elements");
+  await expect.poll(classes).toEqual(["done", "done", "done", "done", "active", "idle"]);
+  await expect(page.getByRole("status")).toHaveText("Locating 2 named elements. SAM 3.1 outlines where each element appears on the poster.");
+  // The separate progress list is gone, and nothing estimates progress or time.
+  await expect(page.locator(".progress-card")).toHaveCount(0);
+  await expect(page.locator(".stage")).not.toContainText(/\d+%|remaining|minutes? left|seconds? left/i);
+  await noViolations(page);
+  await stream.push({ type: "result", response: fixtureResult("2026-11-04", { image: true }) });
+  await stream.end();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  await expect(page.locator(".how-wide, .how-narrow")).toHaveCount(0);
+});
+
+test("an assessment retry is shown beside its step and no later step is marked early", async ({ page }) => {
+  const stream = await streamStub(page);
+  await page.goto("/");
+  await fillCopyReview(page);
+  await page.getByRole("button", { name: "Review copy" }).click();
+  const steps = await reviewSteps(page);
+  await stream.open();
+  await stream.progress({ stage: "research_started" });
+  await stream.progress({ stage: "research_accepted", pages: 2 });
+  await stream.progress({ stage: "cases_unavailable" });
+  await expect(steps.nth(2)).toHaveClass(/gap/);
+  await expect(steps.nth(2)).toContainText("Could not be read");
+  await stream.progress({ stage: "assessment_started" });
+  await stream.progress({ stage: "assessment_retried" });
+  await expect(steps.nth(3)).toContainText("Running again after a retry");
+  await expect(steps.nth(3)).toHaveClass(/active/);
+  await expect(steps.nth(4)).toHaveClass(/idle/);
+  await expect(steps.nth(5)).toHaveClass(/idle/);
+  await stream.push({ type: "result", response: fixtureResult("2026-11-04") });
+  await stream.end();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+});
+
+test("a broken stream shows the existing failure state and never a clear result", async ({ page }) => {
+  const stream = await streamStub(page);
+  await page.goto("/");
+  await fillCopyReview(page);
+  await page.getByRole("button", { name: "Review copy" }).click();
+  await stream.open();
+  await stream.progress({ stage: "research_started" });
+  await stream.end();
+  await expect(page.getByRole("heading", { name: "The review could not finish" })).toBeVisible();
+  await expect(page.getByText("The review connection ended before a result arrived.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No supported concern found", exact: true })).toHaveCount(0);
+  // A line that breaks the contract fails the same way.
+  await page.getByRole("button", { name: "Review again" }).click();
+  await stream.open();
+  await stream.push({ type: "progress", event: { stage: "research_accepted", pages: 3, excerpt: "model text" } });
+  await expect(page.getByRole("heading", { name: "The review could not finish" })).toBeVisible();
+  await noViolations(page);
+});
+
+test("cancelling a streamed review stops the stream and ignores anything that arrives later", async ({ page }) => {
+  const stream = await streamStub(page);
+  await page.goto("/");
+  await fillCopyReview(page);
+  await page.getByRole("button", { name: "Review copy" }).click();
+  await stream.open();
+  await stream.progress({ stage: "research_started" });
+  await expect(page.getByRole("status")).toContainText("Web research started");
+  await page.getByRole("button", { name: "Cancel review" }).click();
+  await expect(page.getByText("You stopped this review before it finished.", { exact: false })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __cancelled: boolean }).__cancelled)).toBe(true);
+  await stream.push({ type: "result", response: fixtureResult("2026-11-04") });
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toHaveCount(0);
+});
+
+test("the background atmosphere stays continuous for the full page height", async ({ page }) => {
+  // A short window makes the result page taller than the screen, as an open disclosure did.
+  const width = page.viewportSize()!.width;
+  await page.setViewportSize({ width, height: width > 900 ? 560 : 640 });
+  await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }));
+  await page.goto("/");
+  await fillPosterReview(page);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  const layers = await page.evaluate(() => {
+    const before = getComputedStyle(document.body, "::before"), after = getComputedStyle(document.body, "::after");
+    return { tall: document.documentElement.scrollHeight > innerHeight + 40, before: [before.position, before.top, before.bottom], after: after.position, image: before.backgroundImage };
+  });
+  expect(layers.tall).toBe(true);
+  expect(layers.before).toEqual(["fixed", "0px", "0px"]);
+  expect(layers.after).toBe("fixed");
+  expect(layers.image).toContain("radial-gradient");
+  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForTimeout(300);
+  // Down the empty right margin, the ground changes smoothly. The old background ended in a
+  // step of about 16 levels of luminance where the body box ended.
+  if (width > 900) {
+    const shot = await page.screenshot();
+    const meta = await sharp(shot).metadata();
+    const { data } = await sharp(shot).extract({ left: meta.width! - 20, top: 0, width: 20, height: meta.height! }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const rows = Array.from({ length: meta.height! }, (_, y) => { let sum = 0; for (let x = 0; x < 20; x++) { const i = (y * 20 + x) * 3; sum += 0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!; } return sum / 20; });
+    const steps = rows.slice(0, -2).map((value, y) => Math.abs(rows[y + 2]! - value));
+    expect(Math.max(...steps)).toBeLessThan(6);
+  }
+});
+
+test("two consecutive reviews: another poster starts a clean setup with nothing stale", async ({ page }) => {
+  const forms: Array<{ name: string; date: string }> = [];
+  await page.route("**/api/review", async (route) => {
+    const request = route.request();
+    const form = await new Response(new Uint8Array(request.postDataBuffer()!), { headers: { "content-type": request.headers()["content-type"]! } }).formData();
+    forms.push({ name: (form.get("image") as File).name, date: String(form.get("publicationDate")) });
+    await route.fulfill({ json: fixtureResult(String(form.get("publicationDate")), { image: true }) });
+  });
+  await page.route("**/api/variant", async (route) => route.fulfill({ json: await fixtureVariant() }));
+  await page.goto("/");
+  await fillPosterReview(page);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  // Leave a variant comparison open, then start again from the result column.
+  await page.getByRole("button", { name: "Test a variant" }).click();
+  await page.getByLabel("What should change?").fill("Replace it with a paper cup");
+  await page.getByRole("button", { name: "Make variant" }).click();
+  await expect(page.getByRole("heading", { name: "Change the hand" })).toBeVisible();
+  await page.getByRole("button", { name: "Review another poster" }).click();
+  await expect(page.getByRole("heading", { name: "Check a poster before it runs" })).toBeFocused();
+  await expect(page.locator(".mk, .reticle, .overlay, .vlayer, .lens, .evidence.open, .when")).toHaveCount(0);
+  await expect(page.getByLabel("Runs on")).toHaveValue("");
+  await expect(page.locator(".samples")).toBeVisible();
+  await page.getByLabel("Poster image").setInputFiles({ name: "second-poster.png", mimeType: "image/png", buffer: await posterBytes() });
+  await expect(page.getByAltText("Poster under review, second-poster.png")).toBeVisible();
+  await page.getByLabel("Runs on").fill("2026-12-24");
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  await expect(page.locator(".when")).toHaveText("Runs Thu 24 Dec 2026");
+  expect(forms).toEqual([{ name: "test-poster.png", date: "2026-11-04" }, { name: "second-poster.png", date: "2026-12-24" }]);
+  // The top bar's New review does the same, by keyboard.
+  await page.getByRole("button", { name: "New review" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Check a poster before it runs" })).toBeFocused();
+  await expect(page.locator(".mk, .reticle, .lens")).toHaveCount(0);
+  await noViolations(page);
+});
+
+test("a poster dropped on a result, or chosen with Replace while editing, starts a fresh review", async ({ page }) => {
+  let reviews = 0;
+  await page.route("**/api/review", async (route) => { reviews += 1; await route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }); });
+  await page.goto("/");
+  await fillPosterReview(page);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  const bytes = (await posterBytes()).toString("base64");
+  const transfer = await page.evaluateHandle((data) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))], "dropped.png", { type: "image/png" }));
+    return dt;
+  }, bytes);
+  // The page claims the drag, so the browser never opens the file in place of NARAK.
+  const claimed = await page.evaluate((dt) => { const event = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }); document.querySelector(".frame")!.dispatchEvent(event); return event.defaultPrevented; }, transfer);
+  expect(claimed).toBe(true);
+  await expect(page.locator(".drop-hint")).toContainText("Drop to start a new review");
+  await page.dispatchEvent(".frame", "drop", { dataTransfer: transfer });
+  await expect(page.getByAltText("Poster under review, dropped.png")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Check a poster before it runs" })).toBeVisible();
+  await expect(page.locator(".mk, .reticle, .lens, .drop-hint")).toHaveCount(0);
+  // The planned date is kept, so the new poster can be reviewed straight away.
+  await expect(page.getByLabel("Runs on")).toHaveValue("2026-11-04");
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  await editButton(page).click();
+  await expect(page.getByLabel("Runs on")).toBeFocused();
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Replace" }).click();
+  await (await chooser).setFiles({ name: "replaced.png", mimeType: "image/png", buffer: await posterBytes() });
+  await expect(page.getByAltText("Poster under review, replaced.png")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review poster" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to the result" })).toHaveCount(0);
+  expect(reviews).toBe(2);
+});
+
+test("the NARAK wordmark reloads the home page and stops an active review", async ({ page }) => {
+  const failed: string[] = [];
+  page.on("requestfailed", (request) => { if (request.url().includes("/api/review")) failed.push(request.failure()?.errorText ?? "failed"); });
+  await page.route("**/api/review", async () => { /* Never answers, like a long review. */ });
+  await page.goto("/");
+  await fillCopyReview(page);
+  await page.getByRole("button", { name: "Review copy" }).click();
+  await expect(page.getByRole("heading", { name: "Reviewing the copy" })).toBeVisible();
+  const mark = page.getByRole("link", { name: "NARAK" });
+  await expect(mark).toHaveAttribute("href", "/");
+  const navigation = page.waitForEvent("framenavigated");
+  await mark.click();
+  await navigation;
+  await expect(page.getByRole("heading", { name: "Check a poster before it runs" })).toBeVisible();
+  await expect(page.getByLabel("Runs on")).toHaveValue("");
+  await expect.poll(() => failed.length).toBeGreaterThan(0);
+});
+
+test("sample posters fill the form, wait for Review poster and are hidden once a poster is loaded", async ({ page }) => {
+  let reviews = 0;
+  let sent: { name: string; date: string; type: string } | null = null;
+  await page.route("**/api/review", async (route) => {
+    reviews += 1;
+    const request = route.request();
+    const form = await new Response(new Uint8Array(request.postDataBuffer()!), { headers: { "content-type": request.headers()["content-type"]! } }).formData();
+    const file = form.get("image") as File;
+    sent = { name: file.name, date: String(form.get("publicationDate")), type: file.type };
+    await route.fulfill({ json: fixtureResult("2026-12-08", { image: true }) });
+  });
+  await page.goto("/");
+  const samples = page.locator(".samples");
+  await expect(samples.getByRole("heading", { name: "Try a sample" })).toBeVisible();
+  await expect(samples.getByRole("button")).toHaveCount(4);
+  await expect(samples.locator(".label b")).toHaveText(["Dalbit Mart", "Lumen Quest", "Bori Bakery", "Northline"]);
+  await expect(samples.locator(".label small")).toHaveText(["1 Dec 2026", "1 Dec 2026", "8 Dec 2026", "8 Dec 2026"]);
+  // The grid sits below the copy field, and on phones below the upload area too.
+  const copy = await page.locator(".copy-field").boundingBox(), grid = await samples.boundingBox();
+  expect(grid!.y).toBeGreaterThan(copy!.y + copy!.height - 1);
+  if ((page.viewportSize()?.width ?? 0) <= 900) {
+    const drop = await page.locator(".frame").boundingBox();
+    expect(grid!.y).toBeGreaterThan(drop!.y + drop!.height);
+  }
+  await noViolations(page);
+  await samples.getByRole("button", { name: /Bori Bakery sample/ }).click();
+  await expect(page.getByAltText("Poster under review, bori-bakery.jpg")).toBeVisible();
+  await expect(page.getByLabel("Runs on")).toHaveValue("2026-12-08");
+  await expect(page.getByRole("button", { name: "Review poster" })).toBeFocused();
+  await expect(samples).toHaveCount(0);
+  expect(reviews).toBe(0);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  expect(sent).toEqual({ name: "bori-bakery.jpg", date: "2026-12-08", type: "image/jpeg" });
+});
+
+test("only the four supplied samples are served, and the excluded poster is not", async ({ request }) => {
+  for (const id of ["dalbit-camping", "lumen-quest", "bori-bakery", "northline-shoe"]) {
+    for (const [path, type] of [[`/samples/${id}.jpg`, "image/jpeg"], [`/samples/${id}-thumb.webp`, "image/webp"]] as const) {
+      const reply = await request.get(path);
+      expect(reply.status(), path).toBe(200);
+      expect(reply.headers()["content-type"], path).toContain(type);
+    }
+  }
+  for (const path of ["/samples/moru-coffee.png", "/samples/moru-coffee.jpg"]) expect((await request.get(path)).status(), path).toBe(404);
+});
+
+test("the evidence panel groups passages by page, shows the outcome once and hides the card behind it", async ({ page }) => {
+  const response = fixtureResult("2026-11-04", { image: true });
+  if (response.state !== "completed") throw new Error("Expected fixture result");
+  const first = response.result.sources[0]!;
+  const passage = ", and then the poster was withdrawn after complaints";
+  response.result.sources.push({ ...first, id: "S2", blockIndex: 1, citedPassage: passage, annotation: { ...first.annotation, start_index: 0, end_index: passage.length } });
+  response.result.findings[0]!.sourceIds = ["S1", "S2"];
+  await page.route("**/api/review", (route) => route.fulfill({ json: response }));
+  await page.goto("/");
+  await fillPosterReview(page);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  // The outcome is stated once, in the heading.
+  await expect(page.getByText("Emerging signal", { exact: true }).filter({ visible: true })).toHaveCount(1);
+  await page.locator(".lens").getByRole("button", { name: "Evidence", exact: true }).click();
+  await expect(page.locator("#ev-title")).toBeFocused();
+  const panel = page.locator(".evidence");
+  await expect(panel.locator(".src")).toHaveCount(1);
+  await expect(panel.locator(".src .src-top b")).toHaveText("example.com");
+  await expect(panel.locator(".src .passages li")).toHaveCount(2);
+  // A passage that starts mid sentence reads cleanly, with no word added.
+  await expect(panel.locator(".src .passages li").nth(1)).toHaveText("\u2026and then the poster was withdrawn after complaints");
+  await expect(panel.locator(".group-label")).toHaveCount(1);
+  const text = await panel.innerText();
+  expect(text).not.toMatch(/\b[SR]\d+\b/);
+  expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:/);
+  expect(text).not.toMatch(/cited research summar/i);
+  // The exact provider text stays one step away, apart from the model's own inference.
+  await panel.getByText("Original text and citation trace").click();
+  await expect(panel.locator(".trace .raw").nth(1)).toHaveText(passage);
+  await expect(panel.locator(".voice", { hasText: "Inference" })).toContainText("It is not a source.");
+  // The card beside the poster is hidden while the panel is open, so nothing shows clipped.
+  await expect.poll(() => page.locator(".right").evaluate((element) => getComputedStyle(element).visibility)).toBe("hidden");
+  await noViolations(page);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.locator(".right").evaluate((element) => getComputedStyle(element).visibility)).toBe("visible");
+});
+
+test("the planned date shows under the heading and the top bar names no file", async ({ page }) => {
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/review", async (route) => { await held; await route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }); });
+  await page.goto("/");
+  await expect(page.locator(".when")).toHaveCount(0);
+  await fillPosterReview(page);
+  await expect(page.locator(".left .when")).toHaveText("Runs Wed 4 Nov 2026");
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.locator(".left .when")).toHaveText("Runs Wed 4 Nov 2026");
+  release!();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  await expect(page.locator(".left .when")).toHaveText("Runs Wed 4 Nov 2026");
+  await expect(page.locator(".top")).not.toContainText("test-poster.png");
+  await expect(page.locator(".top")).not.toContainText("2026");
+});
+
+test("the favicon set is served in the formats Next.js links", async ({ page, request }) => {
+  await page.goto("/");
+  const links = await page.evaluate(() => [...document.querySelectorAll<HTMLLinkElement>('link[rel="icon"], link[rel="apple-touch-icon"]')].map((link) => ({ rel: link.rel, href: new URL(link.href).pathname, type: link.type })));
+  expect(links.map((link) => link.href).sort()).toEqual(["/apple-icon.png", "/favicon.ico", "/icon.svg"]);
+  for (const [path, type] of [["/icon.svg", "image/svg+xml"], ["/favicon.ico", "image/x-icon"], ["/apple-icon.png", "image/png"]] as const) {
+    const reply = await request.get(path);
+    expect(reply.status(), path).toBe(200);
+    expect(reply.headers()["content-type"], path).toContain(type);
+  }
 });

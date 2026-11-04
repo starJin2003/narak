@@ -107,7 +107,7 @@ function VersionFindings({ title, item }: { title: string; item: Reassessment })
 export function VariantEvidence({ result }: { result: VariantResult }) {
   return <>
     <div className="ev-title"><h2 id="ev-title" tabIndex={-1}>Findings in each version</h2><span className="pill planned">Generated variant</span></div>
-    <p>Both versions were reviewed again with the same cited passages, registry notes and date. Source IDs refer to the sources of the first review.</p>
+    <p>Both versions were reviewed again with the same cited passages, documented case notes and date as the first review.</p>
     <VersionFindings title="Original poster, reviewed again" item={result.original} />
     <VersionFindings title="Generated variant" item={result.variant} />
     <section className="ev-sec"><h3>What this comparison can show</h3><ul>{result.notes.map((note, index) => <li key={index}>{note}</li>)}</ul></section>

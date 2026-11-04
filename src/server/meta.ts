@@ -11,9 +11,10 @@ import { incomplete, invalidResponse, ReviewError } from "./review-error";
 import { parseMetaResponse } from "./meta-response";
 import { createRegistryRetriever, type ImageryCandidate, type ImageryCheck, type RegistryRetriever } from "./knowledge/review-context";
 import { createReviewDiagnostics, providerMetadata, type ReviewDiagnostics } from "./review-diagnostics";
-import { normalizeConcept, segmentImage } from "./segmentation";
+import { conceptsFromFindings, normalizeConcept, segmentImage } from "./segmentation";
 import { signContext } from "./evidence-context";
 import type { DiagnosticPayload } from "@/lib/review-diagnostics";
+import type { ReviewProgress } from "@/lib/review-progress";
 import { REQUEST_BUDGET, variantRequestBytes } from "@/lib/transport";
 
 type ReviewOutcome = z.infer<typeof outcomeSchema>;
@@ -403,6 +404,9 @@ export interface MetaOptions {
   timeoutMs?: number;
   registryRetriever?: RegistryRetriever;
   diagnostics?: ReviewDiagnostics;
+  // Stage events for the streamed reply. Counts only, never content. A failing listener
+  // never changes the review.
+  onProgress?: (event: ReviewProgress) => void;
 }
 
 export const SCOPE_LIMITATION = "NARAK reviews cultural, historical and social meaning only. It does not review legal compliance or product claims, including certification, safety, pricing or performance.";
@@ -506,6 +510,7 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
   const fetcher = options.fetcher ?? fetch;
   let activeStage: "research" | "registry" | "assessment" = "research";
   let researchChecked = false, assessmentChecked = false;
+  const progress = (event: ReviewProgress) => { try { options.onProgress?.(event); } catch { /* Progress is display only. */ } };
   try {
     const researchOnce = async () => {
       const attempt = await requestMeta({
@@ -529,6 +534,7 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
       return attempt;
     };
     let research: Awaited<ReturnType<typeof researchOnce>>;
+    progress({ stage: "research_started" });
     try {
       research = await researchOnce();
     } catch (error) {
@@ -538,9 +544,11 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
         || !reason || !RETRYABLE_RESEARCH.has(reason as never) || remainingMs < RESEARCH_RETRY_RESERVE_MS) throw error;
       diagnostics.emit({ event: "research_retried", reason: reason as RetryableResearch, remainingMs: Math.round(remainingMs) });
       diagnostics.clearFailure();
+      progress({ stage: "research_retried" });
       research = await researchOnce();
     }
     diagnostics.emit({ event: "research_checked", result: "accepted" }); researchChecked = true;
+    progress({ stage: "research_accepted", pages: new Set(research.sources.map((source) => source.annotation.url)).size });
 
     activeStage = "registry";
     const posterText = visiblePosterText(research.textBlocks, Boolean(input.image));
@@ -555,6 +563,7 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
     const registry: RegistryContext = parsedRegistry.success ? parsedRegistry.data : { state: "unavailable", code: "bounded_context_exceeded" };
     diagnostics.emit({ event: "registry_checked", state: registry.state,
       ...(registry.state === "available" ? { selectedCases: registry.matchedCaseIds.length } : { category: "registry_unavailable" as const, code: registry.code }) });
+    progress(registry.state === "available" ? { stage: "cases_checked", checked: registry.checkedCases, selected: registry.matchedCaseIds.length } : { stage: "cases_unavailable" });
 
     // This independent call receives only annotated passages, never uncited research prose.
     activeStage = "assessment";
@@ -567,6 +576,7 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
       visibleText: posterText.lines,
     };
     let assessed: Awaited<ReturnType<typeof assessCreative>>;
+    progress({ stage: "assessment_started" });
     try {
       assessed = await assessCreative(input, evidence, { key, signal, fetcher, diagnostics });
     } catch (error) {
@@ -578,8 +588,10 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
         || !reason || !RETRYABLE_ASSESSMENT.has(reason as never) || remainingMs < ASSESSMENT_RESERVE_MS) throw error;
       diagnostics.emit({ event: "assessment_retried", reason: reason as RetryableAssessment, remainingMs: Math.round(remainingMs) });
       diagnostics.clearFailure();
+      progress({ stage: "assessment_retried" });
       assessed = await assessCreative(input, evidence, { key, signal, fetcher, diagnostics });
     }
+    progress({ stage: "assessment_checked" });
     const { assessment, hasFindings, checks, notes: scopeNoteList, outcome, verifiedCaseIds } = assessed;
     const registryEvidence = registry.state === "available" ? registry.evidence : [];
     // The assessment names visible elements; SAM 3.1 only locates them. A region
@@ -590,8 +602,11 @@ async function runReviewWithMeta(input: ReviewInput, options: MetaOptions, diagn
     let segmentation: Segmentation = notRequestedSegmentation(input.image ? "no_visual_concepts" : "no_image");
     let segmentationDropped = 0;
     if (input.image && hasFindings) {
+      const elements = conceptsFromFindings(findings).concepts.length;
+      if (elements) progress({ stage: "regions_started", elements: Math.min(elements, 3) });
       const segmented = await segmentImage({ image: input.image, findings, key, fetcher, signal, deadline });
       segmentation = segmented.segmentation; segmentationDropped = segmented.dropped;
+      if (elements) progress({ stage: "regions_finished" });
       diagnostics.emit({ event: "segmentation_checked", state: segmentation.state, concepts: segmentation.concepts.length,
         regions: segmentation.regions.length, failures: segmented.failures.length });
     }

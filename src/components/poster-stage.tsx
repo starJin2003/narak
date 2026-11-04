@@ -32,7 +32,8 @@ export function PosterStage(props: {
   arrival: boolean;
   frameRef: Ref<HTMLDivElement>;
   dragging: boolean;
-  onDragging: (value: boolean) => void;
+  // Whether a dropped poster starts a fresh review, for the drop hint's words.
+  fresh: boolean;
   onFile: (file: File | undefined) => void;
   onImageError: () => void;
   fileInput: Ref<HTMLInputElement>;
@@ -45,7 +46,7 @@ export function PosterStage(props: {
   focusHidden?: boolean;
 }) {
   const {
-    image, copy, mode, views, selected, onSelect, segmentationSize, arrival, frameRef, dragging, onDragging,
+    image, copy, mode, views, selected, onSelect, segmentationSize, arrival, frameRef, dragging, fresh,
     onFile, onImageError, fileInput, describedBy, invalid, layers, hideRegions, scanning, focusHidden,
   } = props;
   const setup = mode === "setup";
@@ -71,10 +72,8 @@ export function PosterStage(props: {
   }, [selected]);
 
   const ar = image ? image.width / image.height : 0.8;
-  return <div className="frame-wrap" style={{ "--ar": ar } as CSSProperties}
-    onDragOver={(event) => { if (!setup) return; event.preventDefault(); onDragging(true); }}
-    onDragLeave={() => onDragging(false)}
-    onDrop={(event) => { if (!setup) return; event.preventDefault(); onDragging(false); onFile(event.dataTransfer.files[0]); }}>
+  // Drops are taken by the whole page, so a poster dropped anywhere is never lost.
+  return <div className="frame-wrap" style={{ "--ar": ar } as CSSProperties}>
     <div className={`halo ${scanning ? "on" : ""}`} aria-hidden="true" />
     <div className={`frame ${dragging ? "dragging" : ""}`} ref={frameRef}>
       {image && <Image src={image.url} alt={`Poster under review, ${image.file.name}`} fill unoptimized sizes="60vw" onError={onImageError} />}
@@ -115,6 +114,10 @@ export function PosterStage(props: {
         </div>}
       </>}
       {(mode === "reviewing" || arrival || scanning) && <div className={`scan ${arrival ? "once" : ""}`} aria-hidden="true"><i /></div>}
+      {dragging && mode !== "reviewing" && (image || !setup) && <div className="drop-hint" aria-hidden="true">
+        <b>{fresh ? "Drop to start a new review" : "Drop to replace the poster"}</b>
+        <span>{fresh ? "The current result is cleared. The planned date is kept." : "JPEG, PNG or WebP, up to 4 MB"}</span>
+      </div>}
     </div>
   </div>;
 }

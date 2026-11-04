@@ -199,8 +199,54 @@ export function textLang(value: string): "ko" | undefined {
   return /[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]/.test(value) ? "ko" : undefined;
 }
 
-// Research text can start a cited span with Markdown list or quote markers. Only the
-// display drops them. The stored passage and its character span stay exact.
+// Research text can start a cited span with Markdown list or quote markers, inline emphasis,
+// or in the middle of a sentence after a comma. Only the display changes: markers and
+// emphasis go, leftover leading punctuation goes, and an ellipsis marks a passage that starts
+// mid sentence. No word is added. The stored passage and its character span stay exact.
+const ELLIPSIS = "\u2026";
 export function displayPassage(value: string): string {
-  return value.split("\n").map((line) => line.replace(/^\s*(?:(?:[>*\u2022-]|\d+[.)])\s+)+/, "")).join("\n").trim();
+  const lines = value.split("\n").map((line) => line
+    .replace(/^\s*(?:(?:[>*\u2022-]|\d+[.)])\s+)+/, "")
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "$2")
+    .replace(/[ \t]+/g, " ")
+    .trim()).filter((line, index, all) => line || (index > 0 && index < all.length - 1));
+  let text = lines.join("\n").trim();
+  if (!text) return text;
+  // A digit after the mark means it belongs to a number, such as "-5" or ".5", so it stays.
+  const lead = /^(?:\s|[,;:)\]\u3001\u3002\uff0c](?!\d)|[.\u2013\u2014-](?=\s))+/.exec(text);
+  if (lead) text = text.slice(lead[0].length).trimStart();
+  if (!text) return value.trim();
+  // A lowercase start reads as mid sentence, except in names such as iPhone or eBay.
+  const midStart = Boolean(lead) || /^\p{Ll}(?!\p{Lu})/u.test(text);
+  return `${midStart ? ELLIPSIS : ""}${text}`;
+}
+
+// Cited passages grouped under the page they cite, in first citation order. The page's
+// host and title show once, above its passages.
+export interface CitedPage { url: string; host: string; title: string; passages: ReviewSource[] }
+export function citedPages(sources: readonly ReviewSource[]): CitedPage[] {
+  const pages = new Map<string, CitedPage>();
+  for (const source of sources) {
+    const url = source.annotation.url;
+    const page = pages.get(url) ?? { url, host: hostname(url), title: source.annotation.title.trim(), passages: [] };
+    if (!page.title && source.annotation.title.trim()) page.title = source.annotation.title.trim();
+    page.passages.push(source);
+    pages.set(url, page);
+  }
+  return [...pages.values()];
+}
+
+// A finding's basis label is shown only when findings differ, so it never repeats the
+// outcome the heading already states.
+export function mixedBasis(views: readonly FindingView[]): boolean {
+  return new Set(views.map((view) => BASIS_LABEL[view.basis])).size > 1;
+}
+
+// A moment in Seoul time, the market's own clock, in the page's date style.
+export function formatMoment(value: string): string {
+  const moment = new Date(value);
+  if (!Number.isFinite(moment.getTime())) return value;
+  const seoul = new Date(moment.getTime() + 9 * 3_600_000);
+  const day = formatDate(seoul.toISOString().slice(0, 10));
+  return `${day}, ${String(seoul.getUTCHours()).padStart(2, "0")}:${String(seoul.getUTCMinutes()).padStart(2, "0")} Seoul time`;
 }

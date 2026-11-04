@@ -5,9 +5,12 @@ import {
   IMAGE_TYPES, MAX_COPY_LENGTH, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, REVIEW_TIMEOUT_MS,
   isCalendarDate, reviewResponseSchema, type ReviewIssue, type ReviewResponse,
 } from "@/lib/review-contract";
-import { buildFindingViews, formatDate, unionBox } from "@/lib/review-view";
+import { REVIEW_STREAM_TYPE, readReviewStream, type ReviewProgress } from "@/lib/review-progress";
+import { buildFindingViews, formatDate, retrospective, unionBox } from "@/lib/review-view";
+import type { SamplePoster } from "@/lib/samples";
 import { VARIANT_TIMEOUT_MS, variantResponseSchema } from "@/lib/variant-contract";
 import { PosterStage, type PosterImage } from "./poster-stage";
+import { ReviewAnnouncer, ReviewSteps, SamplePosters } from "./review-progress";
 import { EvidencePanel, FindingLens, ResultSummary, StepNav } from "./review-result";
 import {
   CompareLayers, VariantEvidence, VariantRequestLens, VariantResultLens, type CompareView, type VariantState,
@@ -15,6 +18,8 @@ import {
 
 type Evidence = null | "finding" | "all" | "variant";
 type Leader = { d: string; length: number; x1: number; y1: number; x2: number; y2: number };
+// How a fresh session starts: empty, or from a new poster with the planned date kept.
+type Start = { file?: File; date?: string; focus?: boolean };
 
 const ISSUE_TITLES = {
   incomplete: { title: "Review incomplete", glyph: "g-incomplete" },
@@ -34,16 +39,32 @@ function platformIssue(status: number, kind: "review" | "variant"): { state: Rev
     message: `The ${kind} service sent an unreadable reply (HTTP ${status}). Nothing was assessed. Please try again.` } };
 }
 
+// A streamed reply that stopped before its result, or broke the stream contract.
+const BROKEN_STREAM: ReviewResponse = { state: "failed", result: null, issue: {
+  code: "invalid_response", retryable: true,
+  message: "The review connection ended before a result arrived. Nothing was assessed, and an unfinished review is never a sign that the creative is clear. Please try again.",
+} };
+
 const reducedMotion = () => typeof window !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const today = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`; };
 
+// Every new review starts a fresh session. Remounting the workspace drops every result,
+// region, variant, timer and request of the last one, so nothing stale can remain.
 export function ReviewWorkspace({ configured }: { configured: boolean }) {
+  const [session, setSession] = useState<{ key: number; start: Start }>({ key: 0, start: {} });
+  const restart = useCallback((start: Start = {}) => setSession((current) => ({ key: current.key + 1, start })), []);
+  return <Workspace key={session.key} configured={configured} start={session.start} onRestart={restart} />;
+}
+
+function Workspace({ configured, start, onRestart }: { configured: boolean; start: Start; onRestart: (start?: Start) => void }) {
   const [copy, setCopy] = useState("");
-  const [date, setDate] = useState("");
+  const [date, setDate] = useState(start.date ?? "");
   const [image, setImage] = useState<PosterImage | null>(null);
   const [issue, setIssue] = useState<ReviewIssue | null>(null);
   const [response, setResponse] = useState<ReviewResponse | null>(null);
   const [pending, setPending] = useState(false);
+  const [progress, setProgress] = useState<ReviewProgress[]>([]);
+  const [opened, setOpened] = useState(false);
   const [editing, setEditing] = useState(false);
   const [reviewedOnce, setReviewedOnce] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -55,8 +76,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   const [compareView, setCompareView] = useState<CompareView>("split");
   const [split, setSplit] = useState(50);
   const [showChanges, setShowChanges] = useState(false);
-  // Setup leads with the poster. Ad copy waits behind a closed disclosure until asked for.
-  const [copyOpen, setCopyOpen] = useState(false);
+  const [sampleLoading, setSampleLoading] = useState<string | null>(null);
   const variantController = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -70,13 +90,16 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   const controller = useRef<AbortController | null>(null);
   const requestNumber = useRef(0);
   const lastTop = useRef<number | null>(null);
-  const focusAfter = useRef<"heading" | "marker" | "evidence" | "variant" | null>(null);
+  const focusAfter = useRef<"heading" | "marker" | "evidence" | "variant" | "review" | null>(start.focus ? "heading" : null);
+  const started = useRef(false);
 
   const result = response?.state === "completed" ? response.result : null;
   const view = pending ? "reviewing" : response && !editing ? (result ? (variant?.phase === "done" ? "compare" : "result") : "issue") : "setup";
   const size = result?.segmentation.image ?? null;
   const views = useMemo(() => result ? buildFindingViews(result, image) : [], [result, image]);
   const current = views[selected];
+  // Anything already reviewed in this session. A new poster then starts a fresh session.
+  const prior = Boolean(response || reviewedOnce || editing);
 
   useEffect(() => () => { if (image) URL.revokeObjectURL(image.url); }, [image]);
   useEffect(() => () => { controller.current?.abort(); variantController.current?.abort(); }, []);
@@ -84,8 +107,10 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   // Focus moves only after the view it targets has rendered.
   useEffect(() => {
     const target = focusAfter.current;
+    if (target === "review" && !image) return;
     focusAfter.current = null;
     if (target === "heading") heading.current?.focus({ preventScroll: false });
+    if (target === "review") document.getElementById("review-action")?.focus();
     if (target === "marker") (document.querySelector<HTMLElement>('.mk[aria-current="true"]') ?? document.querySelector<HTMLElement>(".lens .btn"))?.focus({ preventScroll: true });
     // The panel turns visible over one frame, even with reduced motion, so focus waits for it.
     if (target === "variant") (document.getElementById("variant-instruction") ?? document.getElementById("variant-title"))?.focus({ preventScroll: true });
@@ -106,7 +131,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     setVariant(null);
   }
 
-  function chooseImage(file?: File) {
+  function chooseImage(file?: File, after: "review" | null = null) {
     if (!file || pending) return;
     changed();
     const reject = (message: string) => {
@@ -120,10 +145,43 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     probe.onload = () => {
       if (!probe.naturalWidth || !probe.naturalHeight) { URL.revokeObjectURL(url); return reject("This image could not be read. Choose another JPEG, PNG or WebP file."); }
       if (probe.naturalWidth * probe.naturalHeight > MAX_IMAGE_PIXELS) { URL.revokeObjectURL(url); return reject("Use an image of 20 megapixels or less."); }
+      if (after) focusAfter.current = after;
       setImage({ file, url, width: probe.naturalWidth, height: probe.naturalHeight });
     };
     probe.onerror = () => { URL.revokeObjectURL(url); reject("This image could not be read. Choose another JPEG, PNG or WebP file."); };
     probe.src = url;
+  }
+
+  // A new poster after any review starts a fresh session and keeps only the planned date.
+  function takePoster(file?: File) {
+    if (!file || pending) return;
+    if (prior) onRestart({ file, date: isCalendarDate(date) ? date : undefined, focus: true });
+    else chooseImage(file);
+  }
+
+  // A session started from a new poster loads it through the same checks as any upload.
+  useEffect(() => {
+    if (started.current || !start.file) return;
+    started.current = true;
+    chooseImage(start.file);
+    // Runs once for the session that was started with this file.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function chooseSample(sample: SamplePoster) {
+    if (pending || sampleLoading) return;
+    setSampleLoading(sample.id);
+    try {
+      const reply = await fetch(sample.file, { cache: "force-cache" });
+      if (!reply.ok) throw new Error("sample");
+      const blob = await reply.blob();
+      chooseImage(new File([blob], sample.name, { type: blob.type || "image/png" }), "review");
+      setDate(sample.date);
+    } catch {
+      setIssue({ code: "invalid_input", field: "image", retryable: true, message: "This sample could not be loaded. Choose your own poster or try the sample again." });
+    } finally {
+      setSampleLoading(null);
+    }
   }
 
   function removeImage() {
@@ -135,7 +193,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
 
   function validation(message: string, field: ReviewIssue["field"]) {
     setIssue({ code: "invalid_input", message, field, retryable: false });
-    if (field === "copy") { setCopyOpen(true); setTimeout(() => document.getElementById("copy")?.focus(), 0); return; }
+    if (field === "copy") { setTimeout(() => document.getElementById("copy")?.focus(), 0); return; }
     document.getElementById(field === "publicationDate" ? "publication-date" : "poster-file")?.focus();
   }
 
@@ -154,6 +212,8 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     const number = ++requestNumber.current;
     const timer = setTimeout(() => active.abort(), REVIEW_TIMEOUT_MS + 15_000);
     setPending(true);
+    setProgress([]);
+    setOpened(false);
     setIssue(null);
     setResponse(null);
     setEditing(false);
@@ -163,10 +223,20 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     focusAfter.current = "heading";
     let next: ReviewResponse;
     try {
-      const reply = await fetch("/api/review", { method: "POST", body: form, signal: active.signal, cache: "no-store" });
-      const parsed = reviewResponseSchema.safeParse(await reply.json().catch(() => undefined));
-      if (parsed.success) next = parsed.data;
-      else { const platform = platformIssue(reply.status, "review"); next = { state: platform.state, result: null, issue: platform.issue } as ReviewResponse; }
+      const reply = await fetch("/api/review", { method: "POST", body: form, signal: active.signal, cache: "no-store",
+        headers: { Accept: `${REVIEW_STREAM_TYPE}, application/json` } });
+      if ((reply.headers.get("content-type") ?? "").startsWith(REVIEW_STREAM_TYPE) && reply.body) {
+        const current = () => number === requestNumber.current;
+        const streamed = await readReviewStream(reply.body, {
+          onOpen: () => { if (current()) setOpened(true); },
+          onProgress: (event) => { if (current()) setProgress((list) => [...list, event]); },
+        }, active.signal);
+        next = streamed.kind === "result" ? streamed.response : BROKEN_STREAM;
+      } else {
+        const parsed = reviewResponseSchema.safeParse(await reply.json().catch(() => undefined));
+        if (parsed.success) next = parsed.data;
+        else { const platform = platformIssue(reply.status, "review"); next = { state: platform.state, result: null, issue: platform.issue } as ReviewResponse; }
+      }
     } catch {
       next = { state: active.signal.aborted ? "incomplete" : "unavailable", result: null, issue: {
         code: active.signal.aborted ? "timeout" : "provider_unavailable",
@@ -207,19 +277,18 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
 
   function edit() {
     setEditing(true);
-    if (copy.trim()) setCopyOpen(true);
     setEvidence(null);
     setTimeout(() => document.getElementById("publication-date")?.focus(), 0);
   }
 
   function backToResult() { setEditing(false); focusAfter.current = "heading"; }
 
-  function newReview() {
+  // The wordmark reloads the home page. Stopping both requests first means an active review
+  // ends now, not when the browser tears the page down.
+  function leave() {
     requestNumber.current += 1;
     controller.current?.abort();
-    setImage(null); setCopy(""); setDate(""); setIssue(null); setResponse(null); setPending(false);
-    setEditing(false); setEvidence(null); setSelected(0); setReviewedOnce(false); setCopyOpen(false); dropVariant();
-    focusAfter.current = "heading";
+    variantController.current?.abort();
   }
 
   const select = useCallback((index: number, focusMarker = false) => {
@@ -308,6 +377,31 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     return () => document.removeEventListener("keydown", onKey);
   });
 
+  // A poster dropped anywhere on the page is taken in every state but a running review. The
+  // page always claims the drop, so the browser never opens the file in place of NARAK.
+  const latest = useRef({ pending, takePoster });
+  latest.current = { pending, takePoster };
+  useEffect(() => {
+    const files = (event: DragEvent) => Boolean(event.dataTransfer?.types.includes("Files"));
+    function over(event: DragEvent) {
+      if (!files(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = latest.current.pending ? "none" : "copy";
+      if (!latest.current.pending) setDragging(true);
+    }
+    function leaveWindow(event: DragEvent) { if (!event.relatedTarget) setDragging(false); }
+    function drop(event: DragEvent) {
+      if (!files(event)) return;
+      event.preventDefault();
+      setDragging(false);
+      if (!latest.current.pending) latest.current.takePoster(event.dataTransfer?.files[0]);
+    }
+    document.addEventListener("dragover", over);
+    document.addEventListener("dragleave", leaveWindow);
+    document.addEventListener("drop", drop);
+    return () => { document.removeEventListener("dragover", over); document.removeEventListener("dragleave", leaveWindow); document.removeEventListener("drop", drop); };
+  }, []);
+
   // Phones keep the review action in reach until the poster's own controls scroll into view.
   useEffect(() => {
     function update() {
@@ -362,28 +456,36 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   // The prototype's view names drive the ported layout rules.
   const dataView = view === "setup" ? (image ? "ready" : "empty")
     : view === "issue" ? (response?.state === "unavailable" ? "unavailable" : "incomplete") : view;
-  const objectName = image ? image.file.name : view === "setup" ? "New review" : "Copy review";
   const fieldIssue = (field: ReviewIssue["field"]) => issue?.field === field ? issue : null;
   const generalIssue = issue && !issue.field ? issue : null;
   const material = image ? "poster" : "copy";
+  const runs = isCalendarDate(date) ? <p className="when">Runs {formatDate(date, true)}</p> : null;
 
   const target = variant ? views[variant.finding] : undefined;
   const targetRegions = target?.location.kind === "found" ? target.location.regions : [];
   const comparing = view === "compare" && variant?.phase === "done" ? variant.result : null;
+  const restartFresh = () => { leave(); onRestart({ focus: true }); };
+  // The same ordered list in two places: the left column on wide screens, and a disclosure
+  // below the poster on phones. CSS shows one of them, so assistive technology meets it once.
+  const steps = (where: "wide" | "narrow") => {
+    const list = <ReviewSteps running={view === "reviewing"} opened={opened} events={progress} />;
+    return where === "wide"
+      // The left column announces state changes. The list does not, so each stage is announced
+      // once, by the status line below.
+      ? <section className="howto how-wide" aria-labelledby="how-title" aria-live="off"><h2 id="how-title">How a review works</h2>{list}</section>
+      : <details className="howto how-narrow"><summary>How a review works</summary>{list}</details>;
+  };
 
   return <div className={`app ${view} ${evidence && (view === "result" || view === "compare") ? "reading" : ""}`} data-view={dataView}>
     <a className="skip-link" href="#stage">Skip to the poster</a>
     <header className="top">
-      <span className="mark">NARAK</span>
-      <div className="obj">
-        <span className="name" title={objectName}>{objectName}</span>
-        {date && view !== "setup" && (view === "reviewing"
-          ? <span className="chip">Runs {formatDate(date, true)}</span>
-          : <button className="chip" type="button" onClick={edit} aria-label={`Runs ${formatDate(date, true)}. Edit the creative or date`}>Runs {formatDate(date, true)}</button>)}
-      </div>
+      {/* A plain link on purpose: the browser reloads the home page, so the app resets and every
+          request ends. Client navigation would keep this page's state. */}
+      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      <a className="mark" href="/" onClick={leave}>NARAK</a>
       <div className="top-actions">
         {!configured && <span className="status-note"><span className="status-long">Live review unavailable</span><span className="status-short" aria-hidden="true">Unavailable</span></span>}
-        {(view === "result" || view === "compare" || view === "issue") && <button className="btn quiet sm quiet-sm" type="button" aria-label="New review" onClick={newReview}>
+        {(view === "result" || view === "compare" || view === "issue") && <button className="btn quiet sm quiet-sm" type="button" aria-label="New review" onClick={restartFresh}>
           <span className="new-l">New review</span><span className="new-s">New</span></button>}
       </div>
     </header>
@@ -392,17 +494,21 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
       <section className="left" aria-live="polite">
         {view === "setup" && <>
           <h1 id="page-title" ref={heading} tabIndex={-1}>{editing ? "Edit the creative or date" : "Check a poster before it runs"}</h1>
+          {runs}
           <p className="lede">{editing ? "Changing anything replaces the current result." : "Explore how your poster could be interpreted"}</p>
           <p className="fine privacy-wide">Your poster goes to Meta when you review, with any ad copy you add. NARAK does not save uploads or results.</p>
+          {steps("wide")}
         </>}
         {view === "reviewing" && <>
           <h1 id="page-title" ref={heading} tabIndex={-1}>Reviewing the {material}</h1>
+          {runs}
           <p className="lede">A live review can take up to five minutes.</p>
-          <p className="fine">Cited web research runs first, then the documented cases and the assessment.{image ? " The elements the assessment names are outlined last." : ""}</p>
           <div><button className="btn quiet sm" type="button" onClick={cancel}>Cancel review</button></div>
+          {steps("wide")}
         </>}
         {view === "issue" && response && response.state !== "completed" && <>
           <div className="result-head"><span className={`glyph ${ISSUE_TITLES[response.state].glyph}`} aria-hidden="true" /><h1 id="page-title" ref={heading} tabIndex={-1}>{ISSUE_TITLES[response.state].title}</h1></div>
+          {runs}
           <p className="lede">{response.issue.message}</p>
           <p className="fine">Nothing was assessed, so nothing on the poster is marked. An unfinished review is never a sign that the creative is clear.</p>
           <div className="row">
@@ -411,19 +517,21 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
           </div>
         </>}
         {(view === "result" || view === "compare") && result && <ResultSummary result={result} views={views} selected={selected} onSelect={(index) => select(index)}
-          onEdit={edit} onAllEvidence={() => openEvidence("all")} headingRef={heading} />}
+          onEdit={edit} onAllEvidence={() => openEvidence("all")} onAnother={restartFresh} headingRef={heading}
+          retro={retrospective(result.scope.publicationDate, result.scope.checkedAt)} />}
       </section>
 
       <div className="center">
         <PosterStage image={image} copy={copy} mode={view} views={views} selected={selected} onSelect={select}
-          segmentationSize={size} arrival={arrival} frameRef={frame} dragging={dragging} onDragging={setDragging}
-          onFile={chooseImage} onImageError={() => { setImage(null); setIssue({ code: "invalid_input", message: "This image could not be shown. Choose another JPEG, PNG or WebP file.", field: "image", retryable: false }); }}
+          segmentationSize={size} arrival={arrival} frameRef={frame} dragging={dragging} fresh={prior}
+          onFile={takePoster} onImageError={() => { setImage(null); setIssue({ code: "invalid_input", message: "This image could not be shown. Choose another JPEG, PNG or WebP file.", field: "image", retryable: false }); }}
           fileInput={fileInput} describedBy="file-error" invalid={Boolean(fieldIssue("image"))}
           scanning={variant?.phase === "pending"}
           focusHidden={Boolean(comparing && compareView === "variant" && comparing.redetection.targetStillDetected === false)}
           hideRegions={comparing ? new Set(views.flatMap((item) => item.location.kind === "found" ? item.location.regions.map((region) => region.id) : []).filter((id) => id !== comparing.target.regionId)) : undefined}
           layers={comparing ? <CompareLayers result={comparing} view={compareView} split={split} showChanges={showChanges} onSplit={setSplit} /> : undefined} />
         {view === "setup" && image && <div className="frame-tools" role="group" aria-label="Poster image">
+          <span className="file" title={image.file.name}>{image.file.name}</span>
           <button className="btn quiet sm" type="button" onClick={() => fileInput.current?.click()}>Replace</button>
           <button className="btn quiet sm" type="button" onClick={removeImage}>Remove</button>
         </div>}
@@ -436,7 +544,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
                 aria-invalid={Boolean(fieldIssue("publicationDate"))} aria-describedby="needs date-note date-error"
                 onChange={(event) => { changed(); setDate(event.target.value); }} />
             </div>
-            <button className="btn" type="button" aria-disabled={!ready} aria-describedby="needs" onClick={submit}>
+            <button className="btn" id="review-action" type="button" aria-disabled={!ready} aria-describedby="needs" onClick={submit}>
               {reviewedOnce ? "Review again" : image || !copy.trim() ? "Review poster" : "Review copy"}
             </button>
             {editing && result && <button className="textbtn" type="button" onClick={backToResult}>Back to the result</button>}
@@ -447,7 +555,9 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
           <span className="sentinel" ref={sentinel} aria-hidden="true" />
           {/* Phones show the privacy line under the action, so the poster still leads the screen. */}
           <p className="fine privacy-narrow">Your poster goes to Meta when you review, with any ad copy you add. NARAK does not save uploads or results.</p>
+          {steps("narrow")}
         </>}
+        {view === "reviewing" && steps("narrow")}
         {view === "result" && views.length > 1 && !variant && <div className="strip"><StepNav index={selected} total={views.length} onStep={step} showCount /></div>}
         {comparing && <div className="strip">
           <div className="seg" role="group" aria-label="Comparison view">
@@ -460,14 +570,15 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
       </div>
 
       {view === "setup" && <div className="right">
-        <details className="about copy-add" open={copyOpen} onToggle={(event) => setCopyOpen(event.currentTarget.open)}>
-          <summary>{copy.trim() ? "Ad copy added" : "Add ad copy"}</summary>
-          <div className="field-label"><label htmlFor="copy">Ad copy, optional</label><span id="copy-count">{copy.length.toLocaleString("en-US")} / 5,000</span></div>
+        <div className="copy-field">
+          <div className="field-label"><label htmlFor="copy">Ad copy</label><span className="optional" id="copy-optional">Optional</span>
+            <span className="count-note" id="copy-count">{copy.length.toLocaleString("en-US")} / 5,000</span></div>
           <textarea id="copy" value={copy} maxLength={MAX_COPY_LENGTH} rows={4} placeholder="Headline, caption or campaign copy in Korean or English"
-            aria-describedby="copy-count copy-error" aria-invalid={Boolean(fieldIssue("copy"))}
+            aria-describedby="copy-optional copy-count copy-error" aria-invalid={Boolean(fieldIssue("copy"))}
             onChange={(event) => { changed(); setCopy(event.target.value); }} />
           <p className="err" id="copy-error" role="alert" hidden={!fieldIssue("copy")}>{fieldIssue("copy")?.message}</p>
-        </details>
+        </div>
+        {!image && !prior && <SamplePosters loading={sampleLoading} onChoose={chooseSample} />}
       </div>}
 
       {(view === "result" || view === "compare") && result && <aside className="right" ref={right} aria-label={variant ? "Controlled variant" : "Selected finding"}>
@@ -475,7 +586,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
           : variant && variant.phase !== "done" ? <VariantRequestLens state={variant} regions={targetRegions} concept={target?.location.kind === "found" ? target.location.concept : "element"} lensRef={lens}
             onInstruction={(value) => setVariant({ phase: "form", finding: variant.finding, regionId: variant.regionId, instruction: value })}
             onRegion={(id) => setVariant({ ...variant, regionId: id })} onSubmit={submitVariant} onCancel={endVariant} />
-          : <FindingLens result={result} view={current} total={views.length} onStep={step} onVariant={startVariant}
+          : <FindingLens result={result} view={current} views={views} total={views.length} onStep={step} onVariant={startVariant}
             onEvidence={() => openEvidence(current ? "finding" : "all")} lensRef={lens}
             canVariant={Boolean(result.variantContext && image && current?.location.kind === "found")} />}
       </aside>}
@@ -488,6 +599,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
       </svg>}
     </main>
 
+    {view === "reviewing" && <ReviewAnnouncer events={progress} />}
     <EvidencePanel open={Boolean(evidence) && (view === "result" || view === "compare")} result={result} view={evidence === "finding" ? current ?? null : null} views={views}
       image={image} size={size} copy={copy} onClose={closeEvidence} onStep={step} panelRef={panel}
       body={evidence === "variant" && comparing ? <VariantEvidence result={comparing} /> : undefined} />
