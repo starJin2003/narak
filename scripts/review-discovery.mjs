@@ -16,7 +16,7 @@ import { connectRegistryWriter } from "./lib/registry-writer.mjs";
 //   npm run evidence:review -- case --file <staged.json> --case-key <key> --title "<title>" --summary "<summary>" --author "<name>"
 //       --trigger "copy|<trigger-key>|<match text>|D1#1|<description>" [--event-date YYYY-MM-DD]
 //   npm run evidence:review -- intake --file <staged.json> [--check-hosted | --apply] [--session-pooler]
-// The worksheet sits next to the staged file in .agents/discovery, which Git ignores.
+// The worksheet sits next to the staged file in .local/discovery, which Git ignores.
 // Without --check-hosted or --apply, intake validates offline and touches no database.
 // --apply writes to the registry with the privileged role. Only the user runs it.
 const [command, ...rest] = process.argv.slice(2);
@@ -33,10 +33,10 @@ function fail(message) { console.error(JSON.stringify({ result: "stopped", reaso
 if (!["status", "decide", "case", "intake"].includes(command)) fail("Use status, decide, case or intake");
 if (!values.file) fail("Name the staged discovery file with --file");
 
-const stagingDir = realpathSync(join(process.cwd(), ".agents", "discovery"));
+const stagingDir = realpathSync(join(process.cwd(), ".local", "discovery"));
 const stagedPath = realpathSync(values.file);
 if (relative(stagingDir, dirname(stagedPath)) !== "" || !stagedPath.endsWith(".json") || stagedPath.endsWith(".review.json")) {
-  fail("The staged file must be a discovery file directly inside .agents/discovery");
+  fail("The staged file must be a discovery file directly inside .local/discovery");
 }
 const stagedText = readFileSync(stagedPath, "utf8");
 const sheetPath = stagedPath.replace(/\.json$/, ".review.json");

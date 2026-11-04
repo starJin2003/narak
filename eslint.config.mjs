@@ -5,6 +5,6 @@ import nextTypescript from "eslint-config-next/typescript";
 export default defineConfig([
   ...nextVitals,
   ...nextTypescript,
-  // .agents holds Git-ignored local design work and third-party skill copies.
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**", "test-results/**", ".agents/**"]),
+  // Dot directories hold local tool state and working files, so lint skips them.
+  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**", "test-results/**", "**/.*/**"]),
 ]);

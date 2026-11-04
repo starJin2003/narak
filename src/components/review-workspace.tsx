@@ -177,6 +177,8 @@ function Workspace({ configured, start, onRestart }: { configured: boolean; star
       const blob = await reply.blob();
       chooseImage(new File([blob], sample.name, { type: blob.type || "image/png" }), "review");
       setDate(sample.date);
+      // A sample with ad copy fills the visible field. The others leave the field as it is.
+      if (sample.copy !== undefined) setCopy(sample.copy);
     } catch {
       setIssue({ code: "invalid_input", field: "image", retryable: true, message: "This sample could not be loaded. Choose your own poster or try the sample again." });
     } finally {

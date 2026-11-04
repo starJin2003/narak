@@ -7,7 +7,7 @@ import { canonicalUrl, runDiscovery, topicSchema } from "./lib/evidence-discover
 
 // Operator-run discovery. Usage:
 //   npm run evidence:discover -- --query "<topic>" --before YYYY-MM-DD [--case <case-key>] [--check-registry]
-// Results go to .agents/discovery, which Git ignores. This script never writes to the database.
+// Results go to .local/discovery, which Git ignores. This script never writes to the database.
 const { values } = parseArgs({ options: {
   query: { type: "string" }, before: { type: "string" }, case: { type: "string" }, "check-registry": { type: "boolean", default: false },
 }, strict: true });
@@ -18,7 +18,7 @@ require("@next/env").loadEnvConfig(process.cwd());
 const key = process.env.MODEL_API_KEY?.trim();
 if (!key || key.startsWith("replace_with_")) throw new Error("Set MODEL_API_KEY in .env.local to run discovery");
 
-const outDir = join(process.cwd(), ".agents", "discovery");
+const outDir = join(process.cwd(), ".local", "discovery");
 mkdirSync(outDir, { recursive: true, mode: 0o700 });
 const stagedUrls = new Set();
 // Review worksheets (*.review.json) sit beside staged files and hold no candidates.

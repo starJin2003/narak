@@ -67,7 +67,7 @@ export function buildManifest() {
         match_text: trigger.match ?? null, publication_start_date: trigger.start ?? null,
         publication_end_date: trigger.end ?? null,
         valid_from: sourceByKey.get(evidence.source).available_at.slice(0, 10), valid_until: null,
-        inference_origin: "model_inference", model_id: "codex-development-model-unspecified",
+        inference_origin: "model_inference", model_id: "development-model-unspecified",
       });
     }
   }
@@ -100,7 +100,7 @@ const schemas = {
     id: uuid, case_id: uuid, trigger_key: text(200).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/), evidence_id: uuid,
     trigger_kind: z.enum(["copy", "imagery", "publication_date"]), description: text(2000), match_text: text(1000).nullable(),
     publication_start_date: date.nullable(), publication_end_date: date.nullable(), valid_from: date, valid_until: z.null(),
-    inference_origin: z.literal("model_inference"), model_id: z.literal("codex-development-model-unspecified"),
+    inference_origin: z.literal("model_inference"), model_id: z.literal("development-model-unspecified"),
   }),
 };
 function requireValid(condition) { if (!condition) throw new Error("Invalid fixed intake manifest"); }

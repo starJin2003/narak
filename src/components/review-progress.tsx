@@ -45,6 +45,5 @@ export function SamplePosters({ loading, onChoose }: { loading: string | null; o
         </button>
       </li>)}
     </ul>
-    <p className="fine">Choosing one fills the form. Nothing is reviewed until you press Review poster.</p>
   </section>;
 }

@@ -908,12 +908,35 @@ test("sample posters fill the form, wait for Review poster and are hidden once a
   await samples.getByRole("button", { name: /Bori Bakery sample/ }).click();
   await expect(page.getByAltText("Poster under review, bori-bakery.jpg")).toBeVisible();
   await expect(page.getByLabel("Runs on")).toHaveValue("2026-12-08");
+  // A sample without its own copy leaves the copy field empty.
+  await expect(copyField(page)).toHaveValue("");
   await expect(page.getByRole("button", { name: "Review poster" })).toBeFocused();
   await expect(samples).toHaveCount(0);
   expect(reviews).toBe(0);
   await page.getByRole("button", { name: "Review poster" }).click();
   await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
   expect(sent).toEqual({ name: "bori-bakery.jpg", date: "2026-12-08", type: "image/jpeg" });
+});
+
+test("the Dalbit Mart sample fills its ad copy, which stays editable and goes with the review", async ({ page }) => {
+  let sent: { name: string; date: string; copy: string } | null = null;
+  await page.route("**/api/review", async (route) => {
+    const request = route.request();
+    const form = await new Response(new Uint8Array(request.postDataBuffer()!), { headers: { "content-type": request.headers()["content-type"]! } }).formData();
+    sent = { name: (form.get("image") as File).name, date: String(form.get("publicationDate")), copy: String(form.get("copy")) };
+    await route.fulfill({ json: fixtureResult("2026-12-01", { image: true }) });
+  });
+  await page.goto("/");
+  await page.locator(".samples").getByRole("button", { name: /Dalbit Mart sample/ }).click();
+  await expect(page.getByAltText("Poster under review, dalbit-camping.jpg")).toBeVisible();
+  await expect(page.getByLabel("Runs on")).toHaveValue("2026-12-01");
+  await expect(copyField(page)).toHaveValue("Emotional Camping Must-have Item");
+  await expect(page.locator("#copy-count")).toHaveText("32 / 5,000");
+  await copyField(page).fill("Emotional Camping Must-have Item, this weekend");
+  await expect(copyField(page)).toHaveValue("Emotional Camping Must-have Item, this weekend");
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  expect(sent).toEqual({ name: "dalbit-camping.jpg", date: "2026-12-01", copy: "Emotional Camping Must-have Item, this weekend" });
 });
 
 test("only the four supplied samples are served, and the excluded poster is not", async ({ request }) => {

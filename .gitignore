@@ -1,8 +1,3 @@
-# Private workspace instructions and project context
-/AGENTS.md
-/ONBOARDING.md
-/STATUS.md
-
 # Environment secrets; sanitized examples may be shared
 .env*
 !.env.example
@@ -12,11 +7,8 @@
 /secrets/
 /credentials*.json
 
-# Local agent configuration, skill copies, and cloud credentials
-/.agents/
-/.codex/
-/.skills/
-/skills/
+# Local working files and cloud credentials
+/.local/
 /.aws/
 
 # Dependencies and package-manager caches
