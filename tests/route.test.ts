@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST, maxDuration } from "@/app/api/review/route";
 import { REVIEW_TIMEOUT_MS } from "@/lib/review-contract";
 
-afterEach(() => vi.unstubAllEnvs());
+beforeEach(() => vi.spyOn(console, "info").mockImplementation(() => undefined));
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 function request(origin?: string, copy = "An ordinary cup of tea.") {
   const form = new FormData();

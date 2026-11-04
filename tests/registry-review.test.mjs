@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectRegistryContext, observedFeatures, createRegistryRetriever, REVIEW_CASE_KEYS } from "@/server/knowledge/review-context";
 import { createKnowledgeRepository } from "@/server/knowledge/repository";
 import { reviewWithMeta } from "@/server/meta";
@@ -6,6 +6,9 @@ import { registryContextSchema, resultSchema } from "@/lib/review-contract";
 import { caseEvidenceSchema, knowledgeCaseSchema, caseTriggerSchema } from "@/server/knowledge/types";
 import { buildManifest } from "../scripts/lib/three-case-intake.mjs";
 import { assessment, assessmentResponse, input, researchResponse } from "./fixtures";
+
+beforeEach(() => vi.spyOn(console, "info").mockImplementation(() => undefined));
+afterEach(() => vi.restoreAllMocks());
 
 const now = new Date("2026-11-03T20:00:00Z");
 const created_at = "2026-11-03T19:28:36.670Z";

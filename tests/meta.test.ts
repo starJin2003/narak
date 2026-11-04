@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reviewWithMeta as reviewImplementation, type MetaOptions } from "@/server/meta";
 import { parseMetaResponse } from "@/server/meta-response";
 import { resultSchema, REVIEW_TIMEOUT_MS, type ReviewInput } from "@/lib/review-contract";
@@ -14,7 +14,8 @@ function reviewWithMeta(value: ReviewInput, options: MetaOptions = {}) {
   return reviewImplementation(value, { registryRetriever: async () => ({ state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] }), ...options });
 }
 
-afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
+beforeEach(() => vi.spyOn(console, "info").mockImplementation(() => undefined));
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("Meta review adapter", () => {
   it("uses the documented endpoint and two stateless calls, preserving citation metadata", async () => {

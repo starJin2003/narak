@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:knowledge-db": "node scripts/test-knowledge-db.mjs",
-    "knowledge:intake": "node scripts/intake-three-cases.mjs"
+    "knowledge:intake": "node scripts/intake-three-cases.mjs",
+    "logs:review": "node --experimental-strip-types scripts/review-logs.mjs"
   },
   "dependencies": {
     "next": "16.4.4",
