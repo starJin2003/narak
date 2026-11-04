@@ -5,7 +5,7 @@ import {
   IntakeConflict, ReviewRefused, buildDiscoveryManifest, createWorksheet, recordDecision, reviewStatus, runDiscoveryIntake, setCase,
 } from "../scripts/lib/discovery-review.mjs";
 import { createKnowledgeRepository } from "../src/server/knowledge/repository";
-import { REVIEW_CASE_KEYS, createRegistryRetriever } from "../src/server/knowledge/review-context";
+import { createRegistryRetriever } from "../src/server/knowledge/review-context";
 
 // A synthetic staged discovery file. No live provider output or real publisher data.
 const staged = {
@@ -175,7 +175,7 @@ describe.skipIf(!localUrl)("discovery intake against a disposable local PostgreS
     finally { await client.query("ROLLBACK"); }
   });
 
-  it("is readable through the runtime repository, while reviews still consult only the seed case keys", async () => {
+  it("is readable through the runtime repository, and reviews now select it by its copy trigger", async () => {
     const read = async (operation) => {
       await client.query("BEGIN READ ONLY");
       try { const data = await operation(client); await client.query("COMMIT"); return { state: "available", data }; }
@@ -185,10 +185,12 @@ describe.skipIf(!localUrl)("discovery intake against a disposable local PostgreS
     const detail = await repository.getCaseById(rows().knowledge_cases[0].id);
     expect(detail.data.case.status).toBe("emerging");
     expect(detail.data.evidence).toHaveLength(4);
-    // Current limitation, recorded in STATUS: runtime selection uses fixed seed keys.
-    expect(REVIEW_CASE_KEYS).not.toContain("synthetic-poster-2021-05");
-    const retriever = createRegistryRetriever(() => repository.getReviewCases(REVIEW_CASE_KEYS));
-    const context = await retriever({ copy: "camping poster", publicationDate: "2026-11-20", market: "KR" }, [], new AbortController().signal);
-    expect(context).toMatchObject({ state: "available", matchedCaseIds: [] });
+    // Selection is data driven, so an intaken case is a candidate as soon as it is in the registry.
+    const retriever = createRegistryRetriever(() => repository.getReviewCandidates());
+    const context = await retriever({ copy: "A camping poster for the weekend", publicationDate: "2026-11-20", market: "KR" }, [], new AbortController().signal);
+    expect(context).toMatchObject({ state: "available", checkedCases: 1, matchedCaseIds: [rows().knowledge_cases[0].id], gaps: [] });
+    expect(context.evidence.every((note) => note.caseStatus === "emerging")).toBe(true);
+    const unrelated = await retriever({ copy: "A plain winter sale", publicationDate: "2026-11-20", market: "KR" }, [], new AbortController().signal);
+    expect(unrelated).toMatchObject({ state: "available", matchedCaseIds: [] });
   });
 });

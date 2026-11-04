@@ -277,12 +277,13 @@ export async function createVariant(request: VariantRequest, options: VariantOpt
     const quiet = () => createReviewDiagnostics(() => undefined);
     const reassess = async (dataUrl: string): Promise<Reassessment> => {
       try {
-        const { assessment, hasFindings, notes: scopeNoteList } = await assessCreative(
+        const { assessment, outcome, notes: scopeNoteList } = await assessCreative(
           { ...request.input, image: { ...image, mediaType: dataUrl === image.dataUrl ? image.mediaType : "image/png", dataUrl } },
           context.evidence, { key, signal, fetcher, diagnostics: quiet() },
         );
         return {
-          state: "completed", outcome: hasFindings ? "emerging_signal" : "no_supported_concern_found",
+          // The same server check as the first review decides an evidence-backed concern.
+          state: "completed", outcome,
           findings: assessment.findings.map((finding) => ({ ...finding, visualConcept: normalizeConcept(finding.visualConcept) })),
           evidenceScope: assessment.evidenceScope, limitations: [...scopeNoteList, ...assessment.limitations].slice(0, 8),
         };

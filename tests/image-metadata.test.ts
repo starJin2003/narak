@@ -96,7 +96,7 @@ describe("upload metadata", () => {
         if (body.model === "sam-3.1") return Response.json({ id: "s", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: name.includes("orientation 6") ? "" : box }] }] });
         return Response.json(body.tools ? researchResponse() : assessmentResponse(visual));
       });
-      const review = await reviewWithMeta(input, { apiKey: "k", fetcher, registryRetriever: async () => ({ state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] }) });
+      const review = await reviewWithMeta(input, { apiKey: "k", fetcher, registryRetriever: async () => ({ state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [], gaps: [] }) });
       if (review.state !== "completed") throw new Error(`${name} did not complete`);
       if (review.result.variantContext) {
         // The variant route parses the same upload again, so the signed hash must match.
@@ -179,7 +179,7 @@ describe("upload metadata", () => {
     const { signContext } = await import("@/server/evidence-context");
     const token = signContext("k", { publicationDate: "2026-12-01", copy: "", imageDataUrl: first.image!.dataUrl, image: { width: W, height: H },
       firstReview: { outcome: "no_supported_concern_found", findings: 0 },
-      evidence: { sources: [{ sourceId: "S1", title: "t", citedPassage: "p", evidenceState: "unverified", host: "example.com" }], registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] } },
+      evidence: { sources: [{ sourceId: "S1", title: "t", citedPassage: "p", evidenceState: "unverified", host: "example.com" }], registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [], gaps: [] }, visibleText: [] },
       regions: [{ id: "G1", concept: "block", box: { left: 0, top: 0, right: 60, bottom: 40 } }] })!;
     const second = await parseReviewInput(form({ copy: "", publicationDate: "2026-12-01" }, image), new AbortController().signal);
     expect(verifyContext("k", token, { publicationDate: "2026-12-01", copy: "", imageDataUrl: second.image!.dataUrl }).regions).toHaveLength(1);

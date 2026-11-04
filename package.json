@@ -19,6 +19,7 @@
     "knowledge:intake": "node scripts/intake-three-cases.mjs",
     "evidence:discover": "node scripts/discover-evidence.mjs",
     "evidence:review": "node scripts/review-discovery.mjs",
+    "case:review": "node scripts/review-case.mjs",
     "logs:review": "node --experimental-strip-types scripts/review-logs.mjs"
   },
   "dependencies": {

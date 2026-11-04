@@ -5,14 +5,17 @@ export const MAX_COPY_LENGTH = 5_000;
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 export const MAX_IMAGE_PIXELS = 20_000_000;
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-// One research retry needs room for a second research call and an assessment after the
-// first research fails. Measured maximums on 2026-11-04 were 89.5 s for research, 81.2 s for
-// a failed research call and 30.2 s for an assessment at low effort. The 250 s route limit
+// One research retry needs room for a second research call, the registry imagery check and
+// an assessment after the first research fails. Measured maximums on 2026-11-04 were 89.6 s
+// for research and 46.7 s for an assessment at low effort. The review deadline leaves 3 s of
+// margin, so a first research call of up to 92 s can still retry. The 280 s route limit
 // leaves room for upload parsing and the response, inside the 300 s Vercel Hobby maximum.
-export const REVIEW_TIMEOUT_MS = 230_000;
+export const REVIEW_TIMEOUT_MS = 255_000;
 export const RESEARCH_RESERVE_MS = 90_000;
 // Raised from 40 s after a control assessment measured 46.7 s on 2026-11-04.
 export const ASSESSMENT_RESERVE_MS = 50_000;
+// The one low effort registry imagery check that runs between research and assessment.
+export const SELECTION_RESERVE_MS = 20_000;
 
 export const outcomeSchema = z.enum([
   "evidence_backed_concern",
@@ -95,6 +98,9 @@ export const VISUAL_MATCHES = ["not_visual", "clear_visible_match", "color_only"
 // in completed cited research is a complete scoped negative, never insufficient.
 export const INSUFFICIENT_REASONS = ["none", "conflicting_evidence", "creative_not_assessable", "other"] as const;
 export const COPY_PHRASE_MAX = 500;
+// Words visible in the poster, transcribed by the research call. Untrusted data, bounded.
+export const VISIBLE_TEXT_MAX_LINES = 40;
+export const VISIBLE_TEXT_MAX_LINE = 200;
 
 // Encyclopedia hosts, matched on the host or any subdomain. A finding whose only reaction
 // sources are pages on these hosts is removed, because an encyclopedia entry summarizes a
@@ -118,6 +124,14 @@ export function foldForMatch(text: string): string {
   return text.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
 }
 
+// True when a poster phrase is non-empty and appears in the transcribed poster text. Line
+// breaks in a transcription are layout, so whitespace runs compare as one space.
+export function posterPhraseGrounded(phrase: string, lines: readonly string[]): boolean {
+  const squash = (text: string) => foldForMatch(text).replace(/\s+/g, " ").trim();
+  const folded = squash(phrase);
+  return folded.length > 0 && squash(lines.join(" ")).includes(folded);
+}
+
 // True when a finding's copy phrase is non-empty and appears in the submitted copy.
 export function copyPhraseGrounded(phrase: string, copy: string): boolean {
   const folded = foldForMatch(phrase).trim();
@@ -135,7 +149,7 @@ const findingFields = {
   concernType: z.enum(CONCERN_TYPES),
   // The cited sources that document the public reaction or sensitivity itself.
   reactionSourceIds: z.array(z.string().min(1)).max(12),
-  elements: z.array(z.enum(["copy", "image", "date"])).min(1).max(3),
+  elements: z.array(z.enum(["copy", "image", "poster_text", "date"])).min(1).max(4),
   // For a date finding, the date or period a reaction source documents as sensitive, as
   // MM-DD for a recurring date or YYYY-MM-DD for one occasion. Empty strings otherwise.
   documentedDate: z.object({ start: z.string().max(10), end: z.string().max(10) }).strict(),
@@ -144,6 +158,9 @@ const findingFields = {
   // For a finding that relies on submitted copy, the exact phrase of that copy it relies on.
   // Empty otherwise.
   copyPhrase: z.string().max(COPY_PHRASE_MAX),
+  // For a finding that relies on words printed in the poster, the exact words it relies on as
+  // they appear in the transcribed poster text. Empty otherwise.
+  posterPhrase: z.string().max(COPY_PHRASE_MAX),
 };
 
 // A short noun phrase naming the visible element a finding concerns, so SAM 3.1
@@ -225,10 +242,22 @@ export const registryEvidenceSchema = z.object({
   provenance: z.string().min(1).max(2000), relatedEvidenceId: z.uuid().nullable(),
 }).strict();
 
+// Registry selection reads at most this many emerging and verified cases, selects at most
+// MAX_SELECTED_CASES of them, and sends at most REGISTRY_CONTEXT_MAX characters of notes.
+export const MAX_CANDIDATE_CASES = 50;
+export const MAX_SELECTED_CASES = 3;
+export const REGISTRY_CONTEXT_MAX = 60_000;
+// Coverage gaps the registry check reports instead of dropping material silently. A case is
+// always sent whole or left out whole, so a rebuttal never travels without its claim.
+export const REGISTRY_GAPS = [
+  "candidates_truncated", "case_graph_truncated", "selected_cases_truncated", "context_truncated",
+  "imagery_candidates_truncated", "imagery_check_unavailable", "imagery_check_skipped",
+] as const;
 export const registryContextSchema = z.discriminatedUnion("state", [
   z.object({
-    state: z.literal("available"), checkedCases: z.number().int().min(0).max(3),
-    matchedCaseIds: z.array(z.uuid()).max(3), evidence: z.array(registryEvidenceSchema).max(60),
+    state: z.literal("available"), checkedCases: z.number().int().min(0).max(MAX_CANDIDATE_CASES),
+    matchedCaseIds: z.array(z.uuid()).max(MAX_SELECTED_CASES), evidence: z.array(registryEvidenceSchema).max(60),
+    gaps: z.array(z.enum(REGISTRY_GAPS)).max(REGISTRY_GAPS.length).default([]),
   }).strict(),
   z.object({
     state: z.literal("unavailable"), code: z.enum(["not_configured", "invalid_configuration", "database_unavailable", "bounded_context_exceeded"]),
@@ -236,6 +265,22 @@ export const registryContextSchema = z.discriminatedUnion("state", [
 ]);
 
 export type RegistryContext = z.infer<typeof registryContextSchema>;
+export type RegistryContextInput = z.input<typeof registryContextSchema>;
+
+// The only path to an evidence-backed concern. A surviving finding must cite a reported fact
+// from a verified case that was available before the planned date. Model output cannot set it.
+export function verifiedCaseSupport(findings: ReadonlyArray<{ sourceIds: readonly string[] }>, registry: RegistryContext, publicationDate: string): string[] {
+  if (registry.state !== "available") return [];
+  const cutoff = Date.parse(`${publicationDate}T00:00:00+09:00`);
+  const notes = new Map(registry.evidence.map((note) => [note.id, note]));
+  const cases = new Set<string>();
+  for (const finding of findings) for (const id of finding.sourceIds) {
+    const note = notes.get(id);
+    if (note && note.caseStatus === "verified" && note.assertionKind === "reported_fact"
+      && note.publishedOn < publicationDate && Date.parse(note.availableAt) < cutoff) cases.add(note.caseId);
+  }
+  return [...cases].sort();
+}
 
 export const resultSchema = z.object({
   outcome: outcomeSchema,
@@ -282,6 +327,14 @@ export const resultSchema = z.object({
   }
   if (result.findings.some((finding) => finding.elements.includes("copy") && (!result.scope.hasCopy || !finding.copyPhrase.trim()))) {
     context.addIssue({ code: "custom", message: "A copy finding must name the submitted copy phrase it relies on." });
+  }
+  if (result.findings.some((finding) => finding.elements.includes("poster_text") && (!result.scope.hasImage || !finding.posterPhrase.trim()))) {
+    context.addIssue({ code: "custom", message: "A poster wording finding must name the poster phrase it relies on." });
+  }
+  const supported = verifiedCaseSupport(result.findings, result.registry, result.scope.publicationDate);
+  if (JSON.stringify([...result.verifiedCaseIds].sort()) !== JSON.stringify(supported)
+    || (result.outcome === "evidence_backed_concern") !== (supported.length > 0)) {
+    context.addIssue({ code: "custom", message: "Only the server's verified case check can make an evidence-backed concern." });
   }
   if (result.outcome === "evidence_backed_concern" && !result.verifiedCaseIds.length) {
     context.addIssue({ code: "custom", message: "Verified case records are required." });

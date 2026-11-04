@@ -198,6 +198,17 @@ describe("research retry", () => {
     expect(events.some((event) => event.event === "research_retried")).toBe(false);
   });
 
+  it.each([[89_000, true], [93_000, false]] as const)("after a first research call of %i ms, retries: %s", async (elapsed, retries) => {
+    const start = Date.now();
+    let first = true;
+    vi.spyOn(Date, "now").mockImplementation(() => { if (first) { first = false; return start; } return start + elapsed; });
+    const fetcher = sequence(ok(unfinished()), ok(researchResponse()), ok(assessmentResponse()));
+    const { response, events } = await review(input, fetcher);
+    expect(response.state).toBe(retries ? "completed" : "incomplete");
+    expect(fetcher).toHaveBeenCalledTimes(retries ? 3 : 1);
+    if (retries) expect(events.find((event) => event.event === "research_retried")!.remainingMs).toBe(255_000 - 3_000 - elapsed);
+  });
+
   it("does not retry after a cancellation", async () => {
     const stop = new AbortController();
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => { stop.abort(); return Response.json(unfinished()); });
@@ -208,7 +219,7 @@ describe("research retry", () => {
 
   it.each([["an unfinished search", unfinished], ["missing citations", uncited]] as const)(
     "starts a retry after %s only when the shared deadline still holds a research call and an assessment", async (_, failing) => {
-    expect(RESEARCH_RETRY_RESERVE_MS).toBe(140_000);
+    expect(RESEARCH_RETRY_RESERVE_MS).toBe(160_000);
     const short = sequence(ok(failing()), ok(researchResponse()), ok(assessmentResponse()));
     const tight = await review(input, short, { timeoutMs: RESEARCH_RETRY_RESERVE_MS + 3_000 - 1_000 });
     expect(tight.response.state).toBe("incomplete");
@@ -274,7 +285,7 @@ describe("assessment retry", () => {
 
   it("starts an assessment retry only when the shared deadline still holds an assessment", async () => {
     expect(ASSESSMENT_RESERVE_MS).toBe(50_000);
-    expect(RESEARCH_RETRY_RESERVE_MS).toBe(140_000);
+    expect(RESEARCH_RETRY_RESERVE_MS).toBe(160_000);
     const tightFetcher = sequence(ok(researchResponse()), ok(bad()), ok(assessmentResponse()));
     const tight = await review(input, tightFetcher, { timeoutMs: ASSESSMENT_RESERVE_MS + 3_000 - 1_000 });
     expect(tight.response.state).toBe("failed");

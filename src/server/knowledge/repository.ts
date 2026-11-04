@@ -1,9 +1,10 @@
 import "server-only";
 import { z } from "zod";
 import { withKnowledgeRead } from "./database";
+import { MAX_CANDIDATE_CASES } from "@/lib/review-contract";
 import {
-  caseEvidenceSchema, caseTriggerSchema, knowledgeCaseSchema,
-  type KnowledgeCaseDetail, type KnowledgeReader,
+  caseEvidenceSchema, caseTriggerSchema, knowledgeCaseSchema, MAX_CASE_EVIDENCE, MAX_CASE_TRIGGERS,
+  type KnowledgeCaseDetail, type KnowledgeReader, type ReviewCandidates,
 } from "./types";
 
 const recordRow = z.object({ record: z.unknown() });
@@ -23,28 +24,42 @@ export function createKnowledgeRepository(read: KnowledgeReader = withKnowledgeR
   }
 
   return {
-    getReviewCases(caseKeys: string[]) {
-      z.array(z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/)).min(1).max(3).parse(caseKeys);
-      return read<KnowledgeCaseDetail[]>(async (connection) => {
+    // A bounded set of emerging and verified cases, verified first, then the most recently
+    // seen. One extra row and per-case counts reveal truncation, which the caller reports as a
+    // coverage gap. Each graph carries at most 20 notes and 12 triggers.
+    getReviewCandidates(limit = MAX_CANDIDATE_CASES) {
+      z.number().int().min(1).max(MAX_CANDIDATE_CASES).parse(limit);
+      return read<ReviewCandidates>(async (connection) => {
         const result = await connection.query(
           `SELECT to_jsonb(c) AS record,
+            (SELECT count(*)::int FROM narak.case_evidence e WHERE e.case_id=c.id) AS evidence_count,
+            (SELECT count(*)::int FROM narak.case_triggers t WHERE t.case_id=c.id) AS trigger_count,
             (SELECT coalesce(jsonb_agg(e.record ORDER BY e.observed_at, e.id), '[]'::jsonb) FROM (
               SELECT to_jsonb(e) || jsonb_build_object('source', to_jsonb(s)) AS record, e.observed_at, e.id
               FROM narak.case_evidence e JOIN narak.knowledge_sources s ON s.id=e.source_id
-              WHERE e.case_id=c.id ORDER BY e.observed_at, e.id LIMIT 21
+              WHERE e.case_id=c.id ORDER BY e.observed_at, e.id LIMIT $5
             ) e) AS evidence,
             (SELECT coalesce(jsonb_agg(t.record ORDER BY t.id), '[]'::jsonb) FROM (
               SELECT to_jsonb(t) AS record, t.id FROM narak.case_triggers t
-              WHERE t.case_id=c.id ORDER BY t.id LIMIT 13
+              WHERE t.case_id=c.id ORDER BY t.id LIMIT $6
             ) t) AS triggers
-           FROM narak.knowledge_cases c WHERE c.case_key = ANY($1::text[])
-             AND c.market=$2 AND c.status IN ($3,$4) ORDER BY c.case_key LIMIT 4`,
-          [caseKeys, "KR", "emerging", "verified"],
+           FROM narak.knowledge_cases c WHERE c.market=$1 AND c.status IN ($2,$3)
+           ORDER BY (c.status=$3) DESC, c.last_seen_at DESC, c.id ASC LIMIT $4`,
+          ["KR", "emerging", "verified", limit + 1, MAX_CASE_EVIDENCE, MAX_CASE_TRIGGERS],
         );
-        return result.rows.map((row) => {
-          const parsed = z.object({ record: z.unknown(), evidence: z.array(z.unknown()).max(20), triggers: z.array(z.unknown()).max(12) }).parse(row);
-          return { case: knowledgeCaseSchema.parse(parsed.record), evidence: parsed.evidence.map((entry) => caseEvidenceSchema.parse(entry)), triggers: parsed.triggers.map((entry) => caseTriggerSchema.parse(entry)) };
-        });
+        const rows = result.rows.map((row) => z.object({
+          record: z.unknown(), evidence_count: z.number().int().min(0), trigger_count: z.number().int().min(0),
+          evidence: z.array(z.unknown()).max(MAX_CASE_EVIDENCE), triggers: z.array(z.unknown()).max(MAX_CASE_TRIGGERS),
+        }).parse(row));
+        return {
+          truncated: rows.length > limit,
+          cases: rows.slice(0, limit).map((row) => ({
+            case: knowledgeCaseSchema.parse(row.record),
+            evidence: row.evidence.map((entry) => caseEvidenceSchema.parse(entry)),
+            triggers: row.triggers.map((entry) => caseTriggerSchema.parse(entry)),
+            complete: row.evidence_count <= MAX_CASE_EVIDENCE && row.trigger_count <= MAX_CASE_TRIGGERS,
+          })),
+        };
       });
     },
     listVerifiedCases: (limit = 25) => list("verified", limit),

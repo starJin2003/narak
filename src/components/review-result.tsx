@@ -4,8 +4,8 @@ import type { ReactNode, Ref } from "react";
 import Image from "next/image";
 import type { ReviewResult, ReviewSource } from "@/lib/review-contract";
 import {
-  BASIS_LABEL, OUTCOMES, closeView, formatDate, hostname, locationDetail, locationLabel,
-  displayPassage, plural, sourceCounts, textLang, unionBox, type FindingView, type RegistryNote,
+  BASIS_LABEL, BASIS_NOTE, OUTCOMES, closeView, formatDate, hostname, locationDetail, locationLabel,
+  displayPassage, plural, retrospective, sourceCounts, sourceNames, textLang, unionBox, type FindingView, type RegistryNote,
 } from "@/lib/review-view";
 import type { PosterImage } from "./poster-stage";
 
@@ -54,6 +54,10 @@ export function ResultSummary({ result, views, selected, onSelect, onEdit, onAll
       <button className="chip date-m" type="button" onClick={onEdit} aria-label={`Runs ${formatDate(scope.publicationDate, true)}. Edit the creative or date`}>{formatDate(scope.publicationDate)}</button>
     </div>
     <p className="lede">{result.summary}</p>
+    {retrospective(scope.publicationDate, scope.checkedAt) && <div className="retro">
+      <span className="pill none">Retrospective review</span>
+      <p className="fine">A past date makes this a retrospective review. Documented cases count only if they were reported before that day.</p>
+    </div>}
     <details className="about">
       <summary>About this outcome</summary>
       <div className="about-body">
@@ -106,7 +110,7 @@ export function FindingLens({ result, view, total, onStep, onEvidence, onVariant
     <div className="lens-top"><span className="fine">Finding {view.number} of {total}</span><BasisPill view={view} /></div>
     <h2>{view.finding.title}</h2>
     <p>{view.finding.observedElement}</p>
-    <p className="fine">{locationDetail(view.location)}{view.sharedWith.length > 0 && ` The same element also appears in finding ${view.sharedWith.join(" and ")}.`}</p>
+    <p className="fine">{BASIS_NOTE[view.basis]} {locationDetail(view.location)}{view.sharedWith.length > 0 && ` The same element also appears in finding ${view.sharedWith.join(" and ")}.`}</p>
     <div className="acts">
       <button className="btn sm" type="button" onClick={onEvidence}>Evidence</button>
       {canVariant && onVariant && <button className="btn quiet sm" type="button" onClick={onVariant}>Test a variant</button>}
@@ -151,13 +155,13 @@ function Voice({ kind, who, text, attribution, against = false, lang }: {
 }
 
 function NoteVoice({ note, against = false }: { note: RegistryNote; against?: boolean }) {
-  return <Voice kind={ASSERTION_LABEL[note.assertionKind]} who={`${note.id}, ${note.publisher ?? hostname(note.canonicalUrl)}`} text={note.assertionText}
+  return <Voice kind={ASSERTION_LABEL[note.assertionKind]} who={note.publisher ?? hostname(note.canonicalUrl)} text={note.assertionText}
     attribution={`${note.attribution}, ${formatDate(note.publishedOn)}`} against={against} />;
 }
 
 function WebSource({ source }: { source: ReviewSource }) {
   return <div className="src" id={`source-${source.id}`}>
-    <div className="src-top"><b>{hostname(source.annotation.url)}</b><span>{source.id}, unverified web citation</span></div>
+    <div className="src-top"><b>{hostname(source.annotation.url)}</b><span>Unverified web citation</span></div>
     <span className="fine">{source.annotation.title || hostname(source.annotation.url)}</span>
     <p className="passage">{displayPassage(source.citedPassage)}</p>
     <a href={source.annotation.url} target="_blank" rel="noopener noreferrer">{hostname(source.annotation.url)}<span className="vh"> (publisher page, opens in a new tab)</span></a>
@@ -183,9 +187,9 @@ function RegistryPage({ notes }: { notes: RegistryNote[] }) {
     <a href={first.canonicalUrl} target="_blank" rel="noopener noreferrer">{hostname(first.canonicalUrl)}<span className="vh"> (publisher page, opens in a new tab)</span></a>
     <details className="prov"><summary>Registry record</summary><dl>
       {notes.map((note) => <div key={note.id}>
-        <dt>{note.id}, case and evidence</dt><dd>{note.caseId}, {note.evidenceId}</dd>
-        <dt>{note.id}, available from</dt><dd>{note.availableAt}</dd>
-        <dt>{note.id}, provenance</dt><dd>{note.provenance}</dd>
+        <dt>{ASSERTION_LABEL[note.assertionKind]}, case and evidence</dt><dd>{note.caseId}, {note.evidenceId}</dd>
+        <dt>{ASSERTION_LABEL[note.assertionKind]}, available from</dt><dd>{note.availableAt}</dd>
+        <dt>{ASSERTION_LABEL[note.assertionKind]}, provenance</dt><dd>{note.provenance}</dd>
       </div>)}
     </dl></details>
   </div>;
@@ -226,7 +230,7 @@ export function EvidencePanel({ open, result, view, views, image, size, copy, on
   const reported = notes.filter((note) => note.assertionKind === "reported_fact");
   const readings = notes.filter((note) => note.assertionKind === "reported_interpretation");
   const against = notes.filter((note) => note.assertionKind === "rebuttal" || note.assertionKind === "correction");
-  const cited = view ? view.finding.sourceIds.join(", ") : "";
+  const cited = view && result ? sourceNames(view.finding.sourceIds, result) : "";
   return <aside className={`evidence ${open ? "open" : ""}`} ref={panelRef} aria-labelledby="ev-title" aria-hidden={!open} inert={!open} tabIndex={-1}>
     {result && <>
       <div className="ev-head">

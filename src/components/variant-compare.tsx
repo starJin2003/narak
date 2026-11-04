@@ -96,7 +96,7 @@ function VersionFindings({ title, item }: { title: string; item: Reassessment })
     {item.state === "failed" ? <p>{item.message}</p> : <>
       <p><b>{OUTCOMES[item.outcome].label}.</b> {item.findings.length === 0 ? "No finding was supported." : `${item.findings.length} ${item.findings.length === 1 ? "finding" : "findings"}.`}</p>
       {item.findings.map((finding, index) => <div className="src" key={index}>
-        <div className="src-top"><b>{finding.title}</b><span className="fine">{finding.sourceIds.join(", ")}</span></div>
+        <div className="src-top"><b>{finding.title}</b><span className="fine">{plural(finding.sourceIds.length, "cited source")}</span></div>
         <p className="fine">{finding.observedElement}</p>
         <p style={{ margin: 0 }}>{finding.modelInference}</p>
       </div>)}

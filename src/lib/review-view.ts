@@ -62,7 +62,9 @@ export function buildFindingViews(result: ReviewResult, displayed: Size | null):
       location = !regions.length ? { kind: "not_found", concept: concept.concept }
         : aligned ? { kind: "found", concept: concept.concept, regions } : { kind: "unaligned", concept: concept.concept };
     } else location = { kind: concept.status, concept: concept.concept };
-    const basis = registryNotes.some((note) => note.caseStatus === "verified" && result.verifiedCaseIds.includes(note.caseId))
+    // The same rule the server uses for the outcome: a cited reported fact from a verified case
+    // that the server confirmed. Anything else stays an emerging signal.
+    const basis = registryNotes.some((note) => note.caseStatus === "verified" && note.assertionKind === "reported_fact" && result.verifiedCaseIds.includes(note.caseId))
       ? "verified_case" : registryNotes.length ? "emerging_case" : "web_research";
     const sharedWith = concept ? concept.findingIndexes.filter((other) => other !== index).map((other) => other + 1) : [];
     return { index, number: index + 1, finding, location, webSources, registryNotes, basis, sharedWith };
@@ -70,8 +72,34 @@ export function buildFindingViews(result: ReviewResult, displayed: Size | null):
 }
 
 export const BASIS_LABEL = {
-  verified_case: "Verified case", emerging_case: "Emerging case", web_research: "Unverified sources",
+  verified_case: "Evidence-backed concern", emerging_case: "Emerging signal", web_research: "Emerging signal",
 } as const;
+export const BASIS_NOTE = {
+  verified_case: "Backed by a reported fact from a documented case that a person verified.",
+  emerging_case: "Backed by a documented case that no person has verified yet.",
+  web_research: "Backed by cited web sources only. No documented case was cited.",
+} as const;
+
+// A planned date before the day of the check makes a retrospective review.
+export function retrospective(publicationDate: string, checkedAt: string): boolean {
+  const checked = new Date(checkedAt);
+  if (!Number.isFinite(checked.getTime())) return false;
+  // The market is South Korea, so the day of the check is its Seoul date.
+  const seoul = new Date(checked.getTime() + 9 * 3_600_000).toISOString().slice(0, 10);
+  return publicationDate < seoul;
+}
+
+// Readable names for the source trail, so internal S and R identifiers never reach the page.
+export function sourceNames(ids: readonly string[], result: ReviewResult): string {
+  const notes = result.registry.state === "available" ? result.registry.evidence : [];
+  const names = ids.map((id) => {
+    const web = result.sources.find((source) => source.id === id);
+    if (web) return hostname(web.annotation.url);
+    const note = notes.find((entry) => entry.id === id);
+    return note ? note.publisher ?? hostname(note.canonicalUrl) : null;
+  }).filter((name): name is string => Boolean(name));
+  return [...new Set(names)].join(", ");
+}
 
 export function locationLabel(location: FindingLocation): string {
   switch (location.kind) {

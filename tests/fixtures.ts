@@ -48,6 +48,7 @@ export function assessment(findings = true, copyPhrase = "quiet moment"): Assess
       reactionKind: "reaction_to_advertisement_or_campaign",
       visualMatch: "not_visual",
       copyPhrase,
+      posterPhrase: "",
     }] : [],
     evidenceScope: "Only the synthetic cited test material was checked.",
     limitations: ["Synthetic fixture, not a live assessment."],

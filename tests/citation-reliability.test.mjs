@@ -33,7 +33,7 @@ describe("production citation reliability boundaries", () => {
   });
   it("keeps commentary-only citations separate from a citation-free final answer", async () => {
     const raw = researchResponse(); const commentary = message(raw); commentary.phase = "commentary";
-    raw.output.push({ ...commentary, id: "final_message", phase: "final_answer", content: [{ type: "output_text", text: "<creative_observations>[]</creative_observations>", annotations: [] }] });
+    raw.output.push({ ...commentary, id: "final_message", phase: "final_answer", content: [{ type: "output_text", text: "<visible_text>[]</visible_text>", annotations: [] }] });
     const value = await review(raw, undefined, raw);
     expect(value.response.state).toBe("incomplete"); expect(value.events.at(-1).category).toBe("missing_citations");
     const summary = createLogSummary(); for (const line of value.lines) summary.addLine(line);

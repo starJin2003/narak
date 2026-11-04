@@ -376,7 +376,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     <header className="top">
       <span className="mark">NARAK</span>
       <div className="obj">
-        <span className="name">{objectName}</span>
+        <span className="name" title={objectName}>{objectName}</span>
         {date && view !== "setup" && (view === "reviewing"
           ? <span className="chip">Runs {formatDate(date, true)}</span>
           : <button className="chip" type="button" onClick={edit} aria-label={`Runs ${formatDate(date, true)}. Edit the creative or date`}>Runs {formatDate(date, true)}</button>)}
@@ -397,7 +397,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
         </>}
         {view === "reviewing" && <>
           <h1 id="page-title" ref={heading} tabIndex={-1}>Reviewing the {material}</h1>
-          <p className="lede">A live review can take up to four minutes.</p>
+          <p className="lede">A live review can take up to five minutes.</p>
           <p className="fine">Cited web research runs first, then the documented cases and the assessment.{image ? " The elements the assessment names are outlined last." : ""}</p>
           <div><button className="btn quiet sm" type="button" onClick={cancel}>Cancel review</button></div>
         </>}

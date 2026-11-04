@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 // Vercel Fluid Compute allows 300 seconds on Hobby. The review's own 230 second deadline,
 // which leaves room for one research retry, plus 10 seconds of upload reading stays under
 // this limit, so the route can still return an explicit incomplete response first.
-export const maxDuration = 250;
+export const maxDuration = 280;
 
 function respond(body: ReviewResponse, status: number) {
   return Response.json(reviewResponseSchema.parse(body), {

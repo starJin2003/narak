@@ -17,7 +17,7 @@ const count = z.number().int().min(0).max(2_000_000);
 export const searchCountsSchema = z.strictObject({
   completed: count, searching: count, in_progress: count, failed: count, unknown: count,
 });
-const stage = z.enum(["research", "assessment"]);
+const stage = z.enum(["research", "selection", "assessment"]);
 const category = diagnosticCategorySchema.optional();
 const payloadSchema = z.discriminatedUnion("event", [
   z.strictObject({ event: z.literal("review_started") }),
@@ -37,7 +37,14 @@ const payloadSchema = z.discriminatedUnion("event", [
     // Counts only. A copy observation returned for an image-only review is normalized to image.
     observationsNormalized: count.optional(), removedOutOfScope: count.optional(), removedNoReactionSource: count.optional(), removedDateNotDocumented: count.optional(),
     removedWeakReaction: count.optional(), removedVisualMatch: count.optional(), removedEncyclopediaOnly: count.optional(),
-    removedCopyNotGrounded: count.optional() }),
+    removedCopyNotGrounded: count.optional(), removedPosterTextNotGrounded: count.optional() }),
+  // Whether the research call returned a usable transcription of the poster's words. Counts only.
+  z.strictObject({ event: z.literal("visible_text_checked"), state: z.enum(["none", "parsed", "invalid"]), lines: z.number().int().min(0).max(40) }),
+  // How documented cases were selected, as counts per trigger kind. Case identities stay out of logs.
+  z.strictObject({ event: z.literal("registry_selection"), candidates: count, eligible: count, selected: z.number().int().min(0).max(3),
+    copy: count, posterText: count, date: count, imagery: count, gaps: z.number().int().min(0).max(7) }),
+  // The one low effort imagery check of the poster against documented imagery cues.
+  z.strictObject({ event: z.literal("registry_imagery_checked"), state: z.enum(["checked", "failed", "skipped"]), candidates: count, selected: count, durationMs: duration }),
   // Why the assessment said it could not complete. A bounded label, never the model's text.
   z.strictObject({ event: z.literal("assessment_insufficient"), reason: z.enum(["none", "conflicting_evidence", "creative_not_assessable", "other"]) }),
   // Source IDs an assessment named but the server never supplied, counted by field and by

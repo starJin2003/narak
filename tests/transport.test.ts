@@ -22,7 +22,7 @@ function review(options: { maskChars?: number; contextChars?: number; passageCha
     ...Array.from({ length: Math.ceil(Math.max(0, passage.length - 30_000) / 30_000) }, (_, index) => ({
       id: `S${index + 2}`, evidenceState: "unverified" as const, responseId: "r", messageId: "m", blockIndex: 0, citedPassage: "q".repeat(30_000),
       annotation: { type: "url_citation" as const, url: `https://example.com/${index}`, title: "B", start_index: 0, end_index: 10 } }))],
-    registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] },
+    registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [], gaps: [] },
     scope: { market: "KR", publicationDate: "2026-11-20", checkedAt: "2026-11-04T00:00:00Z", hasImage: true, hasCopy: true, completedSearches: 1, citedSources: 1, description: "Synthetic" },
     segmentation: { state: "completed", reason: null, model: "sam-3.1", image: { width: 400, height: 500 },
       concepts: [{ concept: "hand", findingIndexes: [0], status: "found", regionIds: Array.from({ length: 6 }, (_, index) => `G${index + 1}`) }],

@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { z } from "zod";
-import { VISUAL_CONCEPT_MAX, outcomeSchema, registryContextSchema, regionSchema } from "@/lib/review-contract";
+import { VISIBLE_TEXT_MAX_LINE, VISIBLE_TEXT_MAX_LINES, VISUAL_CONCEPT_MAX, outcomeSchema, registryContextSchema, regionSchema } from "@/lib/review-contract";
 import type { EvidenceContext } from "./meta";
 
 // A completed review returns its evidence context signed by the server. A variant request
@@ -32,6 +32,7 @@ const payloadSchema = z.object({
       citedPassage: z.string().min(1).max(30_000), evidenceState: z.literal("unverified"), host: z.string().max(253),
     }).strict()).min(1).max(60),
     registry: registryContextSchema,
+    visibleText: z.array(z.string().max(VISIBLE_TEXT_MAX_LINE)).max(VISIBLE_TEXT_MAX_LINES),
   }).strict(),
   regions: z.array(z.object({
     id: regionSchema.shape.id, concept: z.string().min(2).max(VISUAL_CONCEPT_MAX), box: regionSchema.shape.box,

@@ -4,7 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildManifest, validateManifest, stableId, runIntake, schemaSignature } from "../scripts/lib/three-case-intake.mjs";
 import { createKnowledgeRepository } from "../src/server/knowledge/repository";
-import { selectRegistryContext, REVIEW_CASE_KEYS } from "../src/server/knowledge/review-context";
+import { createRegistryRetriever } from "../src/server/knowledge/review-context";
 
 describe("fixed three-case intake validation", () => {
   it("has three emerging cases, six sources, fourteen assertions and nine triggers", () => {
@@ -165,33 +165,54 @@ describe.skipIf(process.env.NARAK_VERIFY_HOSTED_INTAKE !== "1")("hosted runtime 
     const writable = await client.query("SELECT count(*)::int AS count FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','f') AND (has_table_privilege(c.oid,'INSERT') OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE') OR has_table_privilege(c.oid,'TRUNCATE'))");
     expect(writable.rows[0].count).toBe(0);
   });
-  it("retrieves all three emerging graphs and zero verified cases through the actual runtime repository", async () => {
-    const emerging = await repository.listEmergingCases();
-    expect(emerging.state).toBe("available"); expect(emerging.data).toHaveLength(3);
-    expect(await repository.listVerifiedCases()).toEqual({ state: "available", data: [] });
-    for (const record of buildManifest().knowledge_cases) {
-      const detail = await repository.getCaseById(record.id);
-      expect(detail.state).toBe("available"); expect(detail.data.case.status).toBe("emerging");
-      expect(detail.data.case.reviewed_at).toBeNull(); expect(detail.data.triggers).toHaveLength(3);
-      expect(detail.data.evidence).toHaveLength(buildManifest().case_evidence.filter((row) => row.case_id === record.id).length);
-      expect(detail.data.evidence.every((row) => row.source_id === row.source.id && row.source_excerpt === null)).toBe(true);
+  // Lifecycle invariants. They hold however many cases intake adds and however many a person
+  // verifies or rejects, so the hosted registry can grow without editing this test.
+  it("keeps every case in a valid lifecycle state with one registration and an audited history", async () => {
+    const cases = (await client.query("SELECT id, status, reviewed_at, reviewed_by, review_method, review_rationale FROM narak.knowledge_cases")).rows;
+    expect(cases.length).toBeGreaterThanOrEqual(buildManifest().knowledge_cases.length);
+    for (const row of cases) {
+      const events = (await client.query("SELECT from_status, to_status, reviewed_at, actor, review_method FROM narak.case_status_events WHERE case_id=$1 ORDER BY id", [row.id])).rows;
+      expect(events[0]).toMatchObject({ from_status: null, to_status: "emerging", review_method: "registration" });
+      expect(events.filter((event) => event.review_method === "registration")).toHaveLength(1);
+      expect(events.at(-1).to_status).toBe(row.status);
+      for (const event of events.slice(1)) {
+        expect(event.review_method).toBe("human_review"); expect(event.reviewed_at).not.toBeNull(); expect(event.actor.trim().length).toBeGreaterThan(0);
+      }
+      if (row.status === "emerging" && events.length === 1) expect(row.reviewed_at).toBeNull();
+      if (row.status !== "emerging") expect(row).toMatchObject({ review_method: "human_review", reviewed_at: expect.anything(), reviewed_by: expect.any(String), review_rationale: expect.any(String) });
+      if (row.status === "verified") {
+        expect((await client.query("SELECT count(*)::int AS count FROM narak.case_evidence WHERE case_id=$1 AND assertion_kind='reported_fact'", [row.id])).rows[0].count).toBeGreaterThan(0);
+      }
     }
   });
-  it("retrieves bounded review candidates and selects only the relevant eligible hosted case", async () => {
-    const candidates = await repository.getReviewCases(REVIEW_CASE_KEYS);
-    expect(candidates.state).toBe("available"); expect(candidates.data).toHaveLength(3);
-    const selected = selectRegistryContext({ copy: "GS25 Emotional Camping Must-have Item", publicationDate: "2026-11-04", market: "KR" }, [], candidates);
-    expect(selected.state).toBe("available"); expect(selected.matchedCaseIds).toHaveLength(1);
-    expect(selected.evidence).toHaveLength(5);
-    expect(selected.evidence.every((row) => row.caseStatus === "emerging")).toBe(true);
+  it("keeps notes and triggers linked inside their case, labels inference and stores no unapproved excerpt", async () => {
+    const one = async (sql) => (await client.query(sql)).rows[0].count;
+    expect(await one("SELECT count(*)::int AS count FROM narak.case_evidence e JOIN narak.knowledge_sources s ON s.id=e.source_id WHERE e.source_excerpt IS NOT NULL AND s.storage_rights <> 'excerpt_permitted'")).toBe(0);
+    expect(await one("SELECT count(*)::int AS count FROM narak.knowledge_sources WHERE storage_rights = 'excerpt_permitted' AND (rights_reviewed_by IS NULL OR rights_reviewed_at IS NULL)")).toBe(0);
+    expect(await one("SELECT count(*)::int AS count FROM narak.case_evidence WHERE (assertion_kind = 'model_inference') <> (model_id IS NOT NULL)")).toBe(0);
+    expect(await one("SELECT count(*)::int AS count FROM narak.case_triggers t JOIN narak.case_evidence e ON e.id=t.evidence_id WHERE e.case_id <> t.case_id")).toBe(0);
+    expect(await one("SELECT count(*)::int AS count FROM narak.case_triggers WHERE (inference_origin = 'model_inference') <> (model_id IS NOT NULL)")).toBe(0);
   });
-  it("retains hosted Unicode, six sources, fourteen assertions, nine triggers and three audit events", async () => {
-    for (const [table, count] of [["knowledge_cases", 3], ["knowledge_sources", 6], ["case_evidence", 14], ["case_triggers", 9], ["case_status_events", 3]]) {
-      expect((await client.query(`SELECT count(*)::int AS count FROM narak.${table}`)).rows[0].count).toBe(count);
-    }
-    const row = buildManifest().case_triggers[0];
-    expect((await client.query("SELECT match_text FROM narak.case_triggers WHERE id=$1", [row.id])).rows[0].match_text).toBe(row.match_text);
+  it("still holds every seed row with its reviewed content and Unicode intact", async () => {
+    const manifest = buildManifest();
+    for (const row of manifest.knowledge_sources) expect((await client.query("SELECT canonical_url FROM narak.knowledge_sources WHERE id=$1", [row.id])).rows[0]?.canonical_url).toBe(row.canonical_url);
+    for (const row of manifest.knowledge_cases) expect((await client.query("SELECT case_key FROM narak.knowledge_cases WHERE id=$1", [row.id])).rows[0]?.case_key).toBe(row.case_key);
+    for (const row of manifest.case_evidence) expect((await client.query("SELECT assertion_text FROM narak.case_evidence WHERE id=$1", [row.id])).rows[0]?.assertion_text).toBe(row.assertion_text);
+    for (const row of manifest.case_triggers) expect((await client.query("SELECT match_text FROM narak.case_triggers WHERE id=$1", [row.id])).rows[0]?.match_text).toBe(row.match_text);
     expect(await schemaSignature(client)).toMatch(/^[a-f0-9]{64}$/);
+  });
+  it("reads bounded review candidates and selects a seed case by its copy trigger", async () => {
+    const candidates = await repository.getReviewCandidates();
+    expect(candidates.state).toBe("available");
+    expect(candidates.data.cases.length).toBeLessThanOrEqual(50);
+    expect(candidates.data.cases.every((item) => ["emerging", "verified"].includes(item.case.status))).toBe(true);
+    const camping = buildManifest().knowledge_cases[2];
+    const status = (await client.query("SELECT status FROM narak.knowledge_cases WHERE id=$1", [camping.id])).rows[0].status;
+    const selected = await createRegistryRetriever(() => repository.getReviewCandidates())(
+      { copy: "GS25 Emotional Camping Must-have Item", publicationDate: "2026-11-04", market: "KR" }, [], new AbortController().signal);
+    expect(selected.state).toBe("available");
+    if (["emerging", "verified"].includes(status)) expect(selected.matchedCaseIds).toContain(camping.id);
+    else expect(selected.matchedCaseIds).not.toContain(camping.id);
   });
   it("rejects actual writes to all five tables even in explicit read-write transactions", async () => {
     for (const table of ["knowledge_cases", "knowledge_sources", "case_evidence", "case_triggers", "case_status_events"]) {

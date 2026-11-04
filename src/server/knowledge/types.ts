@@ -48,6 +48,13 @@ export type KnowledgeCaseDetail = {
   evidence: CaseEvidence[];
   triggers: CaseTrigger[];
 };
+// Per-case bounds for a review. A larger graph is left out whole and reported as a gap.
+export const MAX_CASE_EVIDENCE = 20;
+export const MAX_CASE_TRIGGERS = 12;
+export type ReviewCandidates = {
+  truncated: boolean;
+  cases: Array<KnowledgeCaseDetail & { complete: boolean }>;
+};
 export type KnowledgeRead<T> = { state: "available"; data: T } | {
   state: "unavailable";
   code: "not_configured" | "invalid_configuration" | "database_unavailable";

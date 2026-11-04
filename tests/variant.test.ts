@@ -16,7 +16,8 @@ const W = 240, H = 300;
 const box = { left: 30, top: 200, right: 110, bottom: 280 };
 const evidence: EvidenceContext = {
   sources: [{ sourceId: "S1", title: "Synthetic source fixture", citedPassage: "A synthetic cited passage.", evidenceState: "unverified", host: "example.com" }],
-  registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] },
+  registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [], gaps: [] },
+  visibleText: [],
 };
 
 async function png(paint: Array<{ left: number; top: number; width: number; height: number; color: string }> = []) {
@@ -353,7 +354,7 @@ describe("review result", () => {
       .mockResolvedValueOnce(Response.json(researchResponse()))
       .mockResolvedValueOnce(Response.json(assessmentResponse(visual)))
       .mockResolvedValueOnce(Response.json(samResponse(SAM_SAMPLE)));
-    const registryRetriever = async () => ({ state: "available" as const, checkedCases: 0, matchedCaseIds: [], evidence: [] });
+    const registryRetriever = async () => ({ state: "available" as const, checkedCases: 0, matchedCaseIds: [], evidence: [], gaps: [] });
     const response = await reviewWithMeta(input, { apiKey: "test", fetcher, registryRetriever });
     if (response.state !== "completed") throw new Error("Expected a completed review");
     const token = response.result.variantContext!;

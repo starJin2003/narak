@@ -26,7 +26,7 @@ function fixtureResult(publicationDate: string, options: { image?: boolean; regi
       citedPassage: researchText,
       annotation: { type: "url_citation", url: "https://example.com/cited-fixture", title: "Synthetic source fixture", start_index: 0, end_index: researchText.length },
     }],
-    registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] },
+    registry: { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [], gaps: [] },
     scope: { market: "KR", publicationDate, checkedAt: "2026-11-03T12:00:00Z", hasImage: Boolean(options.image), hasCopy: true, completedSearches: 1, citedSources: 1, description: "Synthetic browser fixture only." },
     segmentation: options.image ? {
       state: "completed", reason: null, model: "sam-3.1", image: { width: W, height: H },
@@ -257,7 +257,7 @@ test("registry references remain distinct from provider citations and keep their
   if (response.state !== "completed") throw new Error("Expected fixture result");
   response.result.findings[0]!.sourceIds = ["S1", "R1"];
   response.result.registry = {
-    state: "available", checkedCases: 1, matchedCaseIds: ["00000000-0000-4000-8000-000000000001"],
+    state: "available", checkedCases: 1, matchedCaseIds: ["00000000-0000-4000-8000-000000000001"], gaps: [],
     evidence: [{
       id: "R1", caseId: "00000000-0000-4000-8000-000000000001", evidenceId: "00000000-0000-4000-8000-000000000002",
       sourceId: "00000000-0000-4000-8000-000000000003", caseStatus: "emerging", canonicalUrl: "https://example.com/registry-fixture",
@@ -268,18 +268,23 @@ test("registry references remain distinct from provider citations and keep their
   };
   await page.route("**/api/review", (route) => route.fulfill({ json: response }));
   await page.goto("/"); await fillCopyReview(page); await page.getByRole("button", { name: "Review copy" }).click();
-  await expect(page.locator(".lens .pill")).toHaveText("Emerging case");
+  // The finding's label follows the server rule: an emerging case backs an emerging signal.
+  await expect(page.locator(".lens .pill")).toHaveText("Emerging signal");
+  await expect(page.locator(".lens")).toContainText("Backed by a documented case that no person has verified yet.");
   await page.locator(".lens").getByRole("button", { name: "Evidence" }).click();
   // The registry note keeps its own kind, publisher and attribution, apart from the web citation.
   const note = page.locator(".evidence .voice", { hasText: "TEST FIXTURE: Original attributed correction note." });
   await expect(note).toContainText("Correction");
-  await expect(note).toContainText("R1, Synthetic publisher");
+  await expect(note).toContainText("Synthetic publisher");
+  await expect(note).not.toContainText("R1");
   await expect(note).toContainText("Synthetic reporting only, 30 Nov 2023");
   await expect(note).toHaveClass(/against/);
   const record = page.locator(".evidence .src", { hasText: "Synthetic registry fixture" });
   await expect(record).toContainText("Emerging case");
   await expect(record).not.toContainText("Character span");
-  await expect(page.locator("#source-S1")).toContainText("unverified web citation");
+  await expect(page.locator("#source-S1")).toContainText("Unverified web citation");
+  // The source trail names publishers and hosts, never internal S or R identifiers.
+  await expect(page.locator(".evidence .voice .k")).not.toContainText([/\b[SR][0-9]+\b/]);
   await record.getByText("Registry record", { exact: true }).click();
   await expect(page.getByText("TEST FIXTURE: Secondary reporting, not independent verification.")).toBeVisible();
   await noOverflow(page);
@@ -540,4 +545,47 @@ test("every studio state passes automated checks at 1440, 1024, 390 and 320 pixe
     await expect(page.getByRole("heading", { name: "Change the hand" })).toBeVisible();
     await check("compare");
   }
+});
+
+test("long poster file names truncate visibly and stay available in full", async ({ page }) => {
+  await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }));
+  const name = `${"summer-night-camping-campaign-final-approved-version-".repeat(4)}poster.png`;
+  await page.goto("/");
+  await page.getByLabel("Poster image").setInputFiles({ name, mimeType: "image/png", buffer: await posterBytes() });
+  await expect(page.getByAltText(`Poster under review, ${name}`)).toBeVisible();
+  await page.getByLabel("Runs on").fill("2026-11-04");
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  const label = page.locator(".obj .name");
+  if (await label.isVisible()) {
+    await expect(label).toHaveAttribute("title", name);
+    await expect(label).toHaveText(name);
+    expect(await label.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  }
+  await noOverflow(page);
+  await noViolations(page);
+});
+
+test("a past planned date runs as a clearly labeled retrospective review", async ({ page }) => {
+  await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2021-05-11") }));
+  await page.goto("/");
+  await openCopy(page);
+  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
+  await page.getByLabel("Runs on").fill("2021-05-11");
+  await expect(page.locator("#date-note")).toContainText("A past date makes this a retrospective review.");
+  await page.getByRole("button", { name: "Review copy" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  await expect(page.locator(".retro .pill")).toHaveText("Retrospective review");
+  await expect(page.locator(".retro")).toContainText("Documented cases count only if they were reported before that day.");
+  await noViolations(page);
+});
+
+test("a future planned date shows no retrospective label", async ({ page }) => {
+  await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2099-01-05") }));
+  await page.goto("/");
+  await fillCopyReview(page);
+  await page.getByLabel("Runs on").fill("2099-01-05");
+  await page.getByRole("button", { name: "Review copy" }).click();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  await expect(page.locator(".retro")).toHaveCount(0);
 });
