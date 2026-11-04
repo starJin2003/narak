@@ -55,6 +55,8 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   const [compareView, setCompareView] = useState<CompareView>("split");
   const [split, setSplit] = useState(50);
   const [showChanges, setShowChanges] = useState(false);
+  // Setup leads with the poster. Ad copy waits behind a closed disclosure until asked for.
+  const [copyOpen, setCopyOpen] = useState(false);
   const variantController = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -133,7 +135,8 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
 
   function validation(message: string, field: ReviewIssue["field"]) {
     setIssue({ code: "invalid_input", message, field, retryable: false });
-    document.getElementById(field === "publicationDate" ? "publication-date" : field === "image" ? "poster-file" : "copy")?.focus();
+    if (field === "copy") { setCopyOpen(true); setTimeout(() => document.getElementById("copy")?.focus(), 0); return; }
+    document.getElementById(field === "publicationDate" ? "publication-date" : "poster-file")?.focus();
   }
 
   async function submit() {
@@ -204,6 +207,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
 
   function edit() {
     setEditing(true);
+    if (copy.trim()) setCopyOpen(true);
     setEvidence(null);
     setTimeout(() => document.getElementById("publication-date")?.focus(), 0);
   }
@@ -214,7 +218,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
     requestNumber.current += 1;
     controller.current?.abort();
     setImage(null); setCopy(""); setDate(""); setIssue(null); setResponse(null); setPending(false);
-    setEditing(false); setEvidence(null); setSelected(0); setReviewedOnce(false); dropVariant();
+    setEditing(false); setEvidence(null); setSelected(0); setReviewedOnce(false); setCopyOpen(false); dropVariant();
     focusAfter.current = "heading";
   }
 
@@ -353,8 +357,12 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   const phone = typeof window !== "undefined" && matchMedia("(max-width: 900px)").matches;
   const ready = Boolean(image || copy.trim()) && isCalendarDate(date);
   const past = isCalendarDate(date) && date < today();
-  const needs = !image && !copy.trim() ? (date ? "Add a poster or ad copy to review." : "Add a poster or ad copy, and the date it runs.")
-    : !date ? "Choose the date it runs." : "Ready to review.";
+  const needs = !image && !copy.trim() ? (date ? "Add a poster to review." : "Add a poster and the date it runs.")
+    : !date ? "Choose the date it runs." : past ? "" : "Ready to review.";
+  // The prototype's view names drive the ported layout rules.
+  const dataView = view === "setup" ? (image ? "ready" : "empty")
+    : view === "issue" ? (response?.state === "unavailable" ? "unavailable" : "incomplete") : view;
+  const objectName = image ? image.file.name : view === "setup" ? "New review" : "Copy review";
   const fieldIssue = (field: ReviewIssue["field"]) => issue?.field === field ? issue : null;
   const generalIssue = issue && !issue.field ? issue : null;
   const material = image ? "poster" : "copy";
@@ -363,19 +371,20 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
   const targetRegions = target?.location.kind === "found" ? target.location.regions : [];
   const comparing = view === "compare" && variant?.phase === "done" ? variant.result : null;
 
-  return <div className={`app ${view} ${evidence && (view === "result" || view === "compare") ? "reading" : ""}`}>
+  return <div className={`app ${view} ${evidence && (view === "result" || view === "compare") ? "reading" : ""}`} data-view={dataView}>
     <a className="skip-link" href="#stage">Skip to the poster</a>
     <header className="top">
-      <span className="wordmark">NARAK</span>
-      {view !== "setup" && <div className="top-object">
-        <span>{image ? image.file.name : "Copy review"}</span>
-        {date && (view === "reviewing"
-          ? <span className="chip">Runs {formatDate(date)}</span>
-          : <button className="chip" type="button" onClick={edit} aria-label={`Runs ${formatDate(date)}. Edit the creative or date`}>Runs {formatDate(date)}</button>)}
-      </div>}
+      <span className="mark">NARAK</span>
+      <div className="obj">
+        <span className="name">{objectName}</span>
+        {date && view !== "setup" && (view === "reviewing"
+          ? <span className="chip">Runs {formatDate(date, true)}</span>
+          : <button className="chip" type="button" onClick={edit} aria-label={`Runs ${formatDate(date, true)}. Edit the creative or date`}>Runs {formatDate(date, true)}</button>)}
+      </div>
       <div className="top-actions">
-        <span className={`status-dot ${configured ? "on" : ""}`}>{configured ? "Live review" : "Live review unavailable"}</span>
-        {(view === "result" || view === "compare" || view === "issue") && <button className="btn quiet sm" type="button" onClick={newReview}>New review</button>}
+        {!configured && <span className="status-note"><span className="status-long">Live review unavailable</span><span className="status-short" aria-hidden="true">Unavailable</span></span>}
+        {(view === "result" || view === "compare" || view === "issue") && <button className="btn quiet sm quiet-sm" type="button" aria-label="New review" onClick={newReview}>
+          <span className="new-l">New review</span><span className="new-s">New</span></button>}
       </div>
     </header>
 
@@ -384,6 +393,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
         {view === "setup" && <>
           <h1 id="page-title" ref={heading} tabIndex={-1}>{editing ? "Edit the creative or date" : "Check a poster before it runs"}</h1>
           <p className="lede">{editing ? "Changing anything replaces the current result." : "Explore how your poster could be interpreted"}</p>
+          <p className="fine privacy-wide">Your poster goes to Meta when you review, with any ad copy you add. NARAK does not save uploads or results.</p>
         </>}
         {view === "reviewing" && <>
           <h1 id="page-title" ref={heading} tabIndex={-1}>Reviewing the {material}</h1>
@@ -395,7 +405,7 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
           <div className="result-head"><span className={`glyph ${ISSUE_TITLES[response.state].glyph}`} aria-hidden="true" /><h1 id="page-title" ref={heading} tabIndex={-1}>{ISSUE_TITLES[response.state].title}</h1></div>
           <p className="lede">{response.issue.message}</p>
           <p className="fine">Nothing was assessed, so nothing on the poster is marked. An unfinished review is never a sign that the creative is clear.</p>
-          <div className="tools" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
+          <div className="row">
             {response.issue.retryable && <button className="btn" type="button" onClick={submit}>Review again</button>}
             <button className="btn quiet" type="button" onClick={edit}>Edit the creative</button>
           </div>
@@ -410,9 +420,10 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
           onFile={chooseImage} onImageError={() => { setImage(null); setIssue({ code: "invalid_input", message: "This image could not be shown. Choose another JPEG, PNG or WebP file.", field: "image", retryable: false }); }}
           fileInput={fileInput} describedBy="file-error" invalid={Boolean(fieldIssue("image"))}
           scanning={variant?.phase === "pending"}
+          focusHidden={Boolean(comparing && compareView === "variant" && comparing.redetection.targetStillDetected === false)}
           hideRegions={comparing ? new Set(views.flatMap((item) => item.location.kind === "found" ? item.location.regions.map((region) => region.id) : []).filter((id) => id !== comparing.target.regionId)) : undefined}
           layers={comparing ? <CompareLayers result={comparing} view={compareView} split={split} showChanges={showChanges} onSplit={setSplit} /> : undefined} />
-        {view === "setup" && image && <div className="tools" role="group" aria-label="Poster image">
+        {view === "setup" && image && <div className="frame-tools" role="group" aria-label="Poster image">
           <button className="btn quiet sm" type="button" onClick={() => fileInput.current?.click()}>Replace</button>
           <button className="btn quiet sm" type="button" onClick={removeImage}>Remove</button>
         </div>}
@@ -428,13 +439,14 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
             <button className="btn" type="button" aria-disabled={!ready} aria-describedby="needs" onClick={submit}>
               {reviewedOnce ? "Review again" : image || !copy.trim() ? "Review poster" : "Review copy"}
             </button>
-            {editing && result && <button className="textlink" type="button" onClick={backToResult}>Back to the result</button>}
-            <p className="note" id="needs" style={{ width: "100%" }}>{needs}</p>
-            <p className="note" id="date-note" style={{ width: "100%" }} hidden={!past}>A past date makes this a retrospective review. Documented cases count only if they were reported before that day.</p>
-            <p className="err" id="date-error" role="alert" style={{ width: "100%", textAlign: "center" }} hidden={!fieldIssue("publicationDate") && !generalIssue}>{(fieldIssue("publicationDate") ?? generalIssue)?.message}</p>
+            {editing && result && <button className="textbtn" type="button" onClick={backToResult}>Back to the result</button>}
+            <p className="note" id="needs">{needs}</p>
+            <p className="note" id="date-note" hidden={!past}>A past date makes this a retrospective review. Documented cases count only if they were reported before that day.</p>
+            <p className="err" id="date-error" role="alert" hidden={!fieldIssue("publicationDate") && !generalIssue}>{(fieldIssue("publicationDate") ?? generalIssue)?.message}</p>
           </div>
           <span className="sentinel" ref={sentinel} aria-hidden="true" />
-          <p className="fine" style={{ textAlign: "center" }}>Your poster and copy go to Meta when you review. NARAK does not save uploads or results.</p>
+          {/* Phones show the privacy line under the action, so the poster still leads the screen. */}
+          <p className="fine privacy-narrow">Your poster goes to Meta when you review, with any ad copy you add. NARAK does not save uploads or results.</p>
         </>}
         {view === "result" && views.length > 1 && !variant && <div className="strip"><StepNav index={selected} total={views.length} onStep={step} showCount /></div>}
         {comparing && <div className="strip">
@@ -447,12 +459,15 @@ export function ReviewWorkspace({ configured }: { configured: boolean }) {
         </div>}
       </div>
 
-      {view === "setup" && <div className="copy-zone copy-field">
-        <div className="field-label"><label htmlFor="copy">Ad copy, optional</label><span id="copy-count">{copy.length.toLocaleString("en-US")} / 5,000</span></div>
-        <textarea id="copy" value={copy} maxLength={MAX_COPY_LENGTH} rows={4} placeholder="Headline, caption or campaign copy in Korean or English"
-          aria-describedby="copy-count copy-error" aria-invalid={Boolean(fieldIssue("copy"))}
-          onChange={(event) => { changed(); setCopy(event.target.value); }} />
-        <p className="err" id="copy-error" role="alert" hidden={!fieldIssue("copy")}>{fieldIssue("copy")?.message}</p>
+      {view === "setup" && <div className="right">
+        <details className="about copy-add" open={copyOpen} onToggle={(event) => setCopyOpen(event.currentTarget.open)}>
+          <summary>{copy.trim() ? "Ad copy added" : "Add ad copy"}</summary>
+          <div className="field-label"><label htmlFor="copy">Ad copy, optional</label><span id="copy-count">{copy.length.toLocaleString("en-US")} / 5,000</span></div>
+          <textarea id="copy" value={copy} maxLength={MAX_COPY_LENGTH} rows={4} placeholder="Headline, caption or campaign copy in Korean or English"
+            aria-describedby="copy-count copy-error" aria-invalid={Boolean(fieldIssue("copy"))}
+            onChange={(event) => { changed(); setCopy(event.target.value); }} />
+          <p className="err" id="copy-error" role="alert" hidden={!fieldIssue("copy")}>{fieldIssue("copy")?.message}</p>
+        </details>
       </div>}
 
       {(view === "result" || view === "compare") && result && <aside className="right" ref={right} aria-label={variant ? "Controlled variant" : "Selected finding"}>

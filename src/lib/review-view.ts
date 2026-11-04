@@ -116,8 +116,9 @@ export function percentBox(box: Box, image: Size) {
 }
 
 // A close view around the regions, widened toward a landscape shape and kept inside the image.
-export function closeView(box: Box, image: Size, ratio = 1.4) {
-  const pad = Math.round(Math.max(box.right - box.left, box.bottom - box.top) * 0.35) + 12;
+// The evidence panel passes a fixed margin, as the prototype's crop does.
+export function closeView(box: Box, image: Size, ratio = 1.4, margin?: number) {
+  const pad = margin ?? Math.round(Math.max(box.right - box.left, box.bottom - box.top) * 0.35) + 12;
   let width = box.right - box.left + pad * 2;
   let height = box.bottom - box.top + pad * 2;
   if (width / height < ratio) width = height * ratio; else height = width / ratio;
@@ -136,10 +137,14 @@ export function hostname(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
-export function formatDate(value: string): string {
+// Dates read as the prototype writes them, "8 May 2027", and a run date adds the weekday.
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export function formatDate(value: string, weekday = false): string {
   const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime())
-    ? date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime())) return value;
+  const text = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+  return weekday ? `${DAYS[date.getUTCDay()]} ${text}` : text;
 }
 
 // Citations, pages and publishers are different counts. One page can back several cited

@@ -62,16 +62,25 @@ async function noOverflow(page: Page) {
   const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, viewport: innerWidth }));
   expect(size.scroll).toBeLessThanOrEqual(size.viewport);
 }
+// Setup leads with the poster, so the optional copy field waits behind a closed disclosure.
+async function openCopy(page: Page) {
+  if (!(await page.getByLabel("Ad copy, optional").isVisible())) await page.locator(".copy-add summary").click();
+  await expect(page.getByLabel("Ad copy, optional")).toBeVisible();
+}
 async function fillCopyReview(page: Page) {
+  await openCopy(page);
   await page.getByLabel("Ad copy, optional").fill(koreanCopy);
   await page.getByLabel("Runs on").fill("2026-11-04");
 }
 async function fillPosterReview(page: Page) {
   await page.getByLabel("Poster image").setInputFiles({ name: "test-poster.png", mimeType: "image/png", buffer: await posterBytes() });
   await expect(page.getByAltText("Poster under review, test-poster.png")).toBeVisible();
+  await openCopy(page);
   await page.getByLabel("Ad copy, optional").fill(koreanCopy);
   await page.getByLabel("Runs on").fill("2026-11-04");
 }
+// The edit control is the date chip in the top bar, or beside the heading on a phone.
+const editButton = (page: Page) => page.getByRole("button", { name: /Edit the creative or date/ }).filter({ visible: true }).first();
 
 test("pages carry a nonce-based content security policy that the app never violates", async ({ page }) => {
   const violations: string[] = [];
@@ -112,6 +121,7 @@ test("validates missing inputs and preserves Korean copy through a real unavaila
   // The action stays focusable while aria-disabled, so a click explains what is missing.
   await page.getByRole("button", { name: "Review poster" }).click({ force: true });
   await expect(page.locator("#file-error")).toHaveText("Add a poster or ad copy to review.");
+  await openCopy(page);
   await page.getByLabel("Ad copy, optional").fill(koreanCopy);
   await page.getByRole("button", { name: "Review copy" }).click({ force: true });
   await expect(page.locator("#date-error")).toHaveText("Choose the date this runs.");
@@ -175,7 +185,8 @@ test("draws SAM regions on the poster in the right place and opens the linked ev
   await expect(page.locator(".lens")).toContainText("SAM 3.1 outlined one area matching \"hand\"");
   await noViolations(page);
   await page.screenshot({ path: testInfo.outputPath("poster-result.png"), fullPage: true });
-  await page.locator(".lens").getByRole("button", { name: "Next finding" }).click();
+  // Wide screens step with the arrows under the poster; phones keep them in the lens sheet.
+  await page.getByRole("button", { name: "Next finding" }).filter({ visible: true }).first().click();
   await expect(page.locator(".lens")).toContainText("TEST FIXTURE: Copy only finding");
   await expect(page.locator(".lens")).toContainText("ties this finding to the copy or the date");
   await expect(page.locator(".reticle")).toHaveCount(0);
@@ -183,14 +194,15 @@ test("draws SAM regions on the poster in the right place and opens the linked ev
   await expect(page.locator(".lens")).toContainText("Finding 1 of 2");
   await page.locator(".lens").getByRole("button", { name: "Evidence" }).click();
   await expect(page.locator("#ev-title")).toBeFocused();
-  await expect(page.locator(".evidence").getByRole("link", { name: /Synthetic source fixture/ })).toHaveAttribute("href", "https://example.com/cited-fixture");
+  await expect(page.locator(".evidence").getByRole("link", { name: /example\.com/ })).toHaveAttribute("href", "https://example.com/cited-fixture");
+  await expect(page.locator("#source-S1")).toContainText("Synthetic source fixture");
   await expect(page.locator(".evidence figcaption")).toHaveText("Outline by SAM 3.1");
   await page.locator(".evidence").getByText("Citation trace", { exact: true }).click();
   await expect(page.getByText("response_fixture", { exact: true })).toBeVisible();
   await noViolations(page);
   await page.keyboard.press("Escape");
   await expect(page.locator(".evidence")).not.toHaveClass(/open/);
-  await page.getByRole("button", { name: /Edit the creative or date/ }).first().click();
+  await editButton(page).click();
   // Editing moves focus to the date field on the next tick. Waiting for it keeps the fill below
   // from racing that focus change, and checks the focus handoff itself.
   await expect(page.getByLabel("Runs on")).toBeFocused();
@@ -224,7 +236,7 @@ test("a copy only review shows the copy card, findings and sources without regio
   await expect(page.locator(".lens")).toContainText("Synthetic seasonal context");
   await page.locator(".lens").getByRole("button", { name: "Evidence" }).click();
   await expect(page.locator(".evidence .crop")).toHaveCount(0);
-  await expect(page.locator(".evidence").getByText("Where it appears")).toHaveCount(0);
+  await expect(page.locator(".evidence").getByText("Region outline")).toHaveCount(0);
   await noViolations(page);
 });
 
@@ -258,13 +270,17 @@ test("registry references remain distinct from provider citations and keep their
   await page.goto("/"); await fillCopyReview(page); await page.getByRole("button", { name: "Review copy" }).click();
   await expect(page.locator(".lens .pill")).toHaveText("Emerging case");
   await page.locator(".lens").getByRole("button", { name: "Evidence" }).click();
-  const note = page.locator("#source-R1");
-  await expect(note).toContainText("R1, correction");
-  await expect(note).toContainText("TEST FIXTURE: Original attributed correction note.");
-  await expect(note).toContainText("Synthetic reporting only");
-  await expect(note).not.toContainText("Character span");
-  await expect(page.locator("#source-S1")).toContainText("Unverified");
-  await note.getByText("Registry record", { exact: true }).click();
+  // The registry note keeps its own kind, publisher and attribution, apart from the web citation.
+  const note = page.locator(".evidence .voice", { hasText: "TEST FIXTURE: Original attributed correction note." });
+  await expect(note).toContainText("Correction");
+  await expect(note).toContainText("R1, Synthetic publisher");
+  await expect(note).toContainText("Synthetic reporting only, 30 Nov 2023");
+  await expect(note).toHaveClass(/against/);
+  const record = page.locator(".evidence .src", { hasText: "Synthetic registry fixture" });
+  await expect(record).toContainText("Emerging case");
+  await expect(record).not.toContainText("Character span");
+  await expect(page.locator("#source-S1")).toContainText("unverified web citation");
+  await record.getByText("Registry record", { exact: true }).click();
   await expect(page.getByText("TEST FIXTURE: Secondary reporting, not independent verification.")).toBeVisible();
   await noOverflow(page);
   await noViolations(page);
@@ -426,6 +442,7 @@ test("source counts separate passages, pages and documented notes, and copy lang
   response.result.findings[0]!.sourceIds = ["S1", "S2"];
   await page.route("**/api/review", (route) => route.fulfill({ json: response }));
   await page.goto("/");
+  await openCopy(page);
   await page.getByLabel("Ad copy, optional").fill("A quiet camping night with friends");
   await page.getByLabel("Runs on").fill("2026-11-04");
   await page.getByRole("button", { name: "Review copy" }).click();
@@ -442,4 +459,85 @@ test("source counts separate passages, pages and documented notes, and copy lang
   await fillCopyReview(page);
   await page.getByRole("button", { name: "Review copy" }).click();
   await expect(page.locator(".copy-card p")).toHaveAttribute("lang", "ko");
+});
+
+test("setup leads with the poster and keeps optional ad copy behind a closed disclosure", async ({ page }) => {
+  await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04") }));
+  await page.goto("/");
+  const summary = page.locator(".copy-add summary");
+  await expect(summary).toHaveText("Add ad copy");
+  await expect(page.getByLabel("Ad copy, optional")).toBeHidden();
+  // The poster input comes before the copy disclosure in reading and tab order.
+  expect(await page.evaluate(() => Boolean(document.getElementById("poster-file")!.compareDocumentPosition(document.querySelector(".copy-add")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  await expect(page.getByText("Your poster goes to Meta when you review, with any ad copy you add.").filter({ visible: true })).toHaveCount(1);
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Ad copy, optional")).toBeVisible();
+  await page.getByLabel("Ad copy, optional").fill(koreanCopy);
+  await expect(summary).toHaveText("Ad copy added");
+  await page.getByLabel("Runs on").fill("2026-11-04");
+  await page.getByRole("button", { name: "Review copy" }).click();
+  await expect(page.locator(".copy-card")).toContainText(koreanCopy);
+});
+
+test("the ported studio paints its grain and review rim without breaking the content security policy", async ({ page }) => {
+  const violations: string[] = [];
+  page.on("console", (message) => { if (/Content Security Policy|Refused to/i.test(message.text())) violations.push(message.text()); });
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/review", async (route) => { await held; await route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }); });
+  await page.goto("/");
+  const grain = await page.evaluate(() => { const style = getComputedStyle(document.body, "::before"); return { image: style.backgroundImage, opacity: style.opacity, z: style.zIndex, isolation: getComputedStyle(document.body).isolation }; });
+  expect(grain).toMatchObject({ opacity: "0.05", z: "-1", isolation: "isolate" });
+  expect(grain.image).toContain("feTurbulence");
+  await fillPosterReview(page);
+  await page.getByRole("button", { name: "Review poster" }).click();
+  await expect(page.locator(".scan")).toBeVisible();
+  // The rim fades in over 0.6 seconds while the review runs.
+  await expect.poll(() => page.locator(".halo").evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  const rim = await page.locator(".halo").evaluate((element) => ({ animation: getComputedStyle(element).animationName, image: getComputedStyle(element).backgroundImage }));
+  expect(rim.animation).toBe("orbit");
+  expect(rim.image).toContain("conic-gradient");
+  release!();
+  await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+  expect(violations).toEqual([]);
+});
+
+test("every studio state passes automated checks at 1440, 1024, 390 and 320 pixels", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "This test sets each width itself.");
+  test.setTimeout(240_000);
+  await page.route("**/api/review", (route) => route.fulfill({ json: fixtureResult("2026-11-04", { image: true }) }));
+  await page.route("**/api/variant", async (route) => route.fulfill({ json: await fixtureVariant() }));
+  for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [320, 640]] as const) {
+    await page.setViewportSize({ width, height });
+    const check = async (state: string) => {
+      await noOverflow(page);
+      await noViolations(page);
+      if (width > 900) return;
+      // Phone controls keep a 44 pixel target in both directions.
+      const small = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("button, a[href], summary, input, textarea, select")]
+        .filter((element) => element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && !element.closest(".sr-only, .vh")
+          && !element.classList.contains("skip-link") && !element.classList.contains("split-range") && (element as HTMLInputElement).type !== "file")
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.height < 44 || rect.width < 44)
+        .map(({ element, rect }) => `${element.tagName.toLowerCase()}.${element.className} ${element.textContent?.trim().slice(0, 30)} ${Math.round(rect.width)}x${Math.round(rect.height)}`));
+      expect(small, `${width} ${state}`).toEqual([]);
+    };
+    await page.goto("/");
+    await check("empty");
+    await fillPosterReview(page);
+    await check("loaded");
+    await page.getByRole("button", { name: "Review poster" }).click();
+    await expect(page.getByRole("heading", { name: "Emerging signal", exact: true })).toBeVisible();
+    await check("result");
+    await page.locator(".lens").getByRole("button", { name: "Evidence", exact: true }).click();
+    await expect(page.locator("#ev-title")).toBeFocused();
+    await check("evidence");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Test a variant" }).click();
+    await page.getByLabel("What should change?").fill("Replace it with a paper cup");
+    await page.getByRole("button", { name: "Make variant" }).click();
+    await expect(page.getByRole("heading", { name: "Change the hand" })).toBeVisible();
+    await check("compare");
+  }
 });

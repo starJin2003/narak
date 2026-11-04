@@ -33,7 +33,7 @@ export function VariantRequestLens({ state, regions, concept, lensRef, onInstruc
 }) {
   const pending = state.phase === "pending";
   return <div className="lens cmp" ref={lensRef} role="region" aria-label="Controlled variant" aria-busy={pending}>
-    <div className="lens-top"><span className="kicker">Controlled variant</span><span className="pill generated">Muse Image</span></div>
+    <div className="lens-top"><span className="fine">Controlled variant</span><span className="pill planned">Muse Image</span></div>
     <h2 id="variant-title" tabIndex={-1}>{pending ? `Changing the ${concept}` : `Change the ${concept}`}</h2>
     {pending
       ? <p>Muse Image is making the variant. NARAK then reviews both versions with the same evidence and date. This can take up to three minutes.</p>
@@ -68,8 +68,8 @@ export function VariantResultLens({ result, lensRef, onFindings, onClose }: {
   const incomplete = original.state === "failed" || variant.state === "failed";
   const before = naming(original, target.concept), after = naming(variant, target.concept);
   return <div className="lens cmp" ref={lensRef} role="region" aria-label="Variant comparison">
-    <div className="lens-top"><span className="kicker">Controlled variant</span>
-      <span className={`pill ${incomplete ? "neutral" : "generated"}`}>{incomplete ? "Comparison incomplete" : "Generated"}</span></div>
+    <div className="lens-top"><span className="fine">Controlled variant</span>
+      <span className={`pill ${incomplete ? "none" : "planned"}`}>{incomplete ? "Comparison incomplete" : "Generated"}</span></div>
     <h2 id="variant-title" tabIndex={-1}>Change the {target.concept}</h2>
     <p lang={textLang(result.instruction)}>&ldquo;{result.instruction}&rdquo;</p>
     <dl>
@@ -80,9 +80,9 @@ export function VariantResultLens({ result, lensRef, onFindings, onClose }: {
       <div><dt>SAM 3.1 on the variant</dt><dd>{redetectionText(result)}</dd></div>
       <div><dt>Measured change</dt><dd>{percent(preservation.insideChangedShare)} of the selected area, {percent(preservation.outsideChangedShare)} of everything else</dd></div>
     </dl>
-    {(redetection.otherMatchesMissing ?? 0) > 0 && <p className="region-note" style={{ color: "var(--pink-ink)" }}>Another {target.concept} outside the selected area is gone, so the edit may have changed a different element.</p>}
-    {result.originalMatchesFirstReview === false && <p className="region-note" style={{ color: "var(--pink-ink)" }}>The unchanged original was assessed differently this time, so this comparison cannot isolate the edit.</p>}
-    {preservation.material && <p className="region-note" style={{ color: "var(--pink-ink)" }}>Areas outside the element also changed. Any difference may come from them.</p>}
+    {(redetection.otherMatchesMissing ?? 0) > 0 && <p className="warn">Another {target.concept} outside the selected area is gone, so the edit may have changed a different element.</p>}
+    {result.originalMatchesFirstReview === false && <p className="warn">The unchanged original was assessed differently this time, so this comparison cannot isolate the edit.</p>}
+    {preservation.material && <p className="warn">Areas outside the element also changed. Any difference may come from them.</p>}
     <div className="acts">
       <button className="btn sm" type="button" onClick={onFindings}>Compare findings</button>
       <button className="btn quiet sm" type="button" onClick={onClose}>Back to findings</button>
@@ -106,7 +106,7 @@ function VersionFindings({ title, item }: { title: string; item: Reassessment })
 
 export function VariantEvidence({ result }: { result: VariantResult }) {
   return <>
-    <div className="ev-title"><h2 id="ev-title" tabIndex={-1}>Findings in each version</h2><span className="pill generated">Generated variant</span></div>
+    <div className="ev-title"><h2 id="ev-title" tabIndex={-1}>Findings in each version</h2><span className="pill planned">Generated variant</span></div>
     <p>Both versions were reviewed again with the same cited passages, registry notes and date. Source IDs refer to the sources of the first review.</p>
     <VersionFindings title="Original poster, reviewed again" item={result.original} />
     <VersionFindings title="Generated variant" item={result.variant} />
