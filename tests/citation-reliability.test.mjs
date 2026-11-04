@@ -5,9 +5,12 @@ import { createReviewDiagnostics, providerMetadata } from "@/server/review-diagn
 import { createLogSummary } from "../scripts/review-logs.mjs";
 import { input, researchResponse, assessmentResponse, researchText } from "./fixtures";
 
-async function review(raw, registry = { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] }) {
+// retryRaw is the reply to the one research retry that follows missing citations.
+async function review(raw, registry = { state: "available", checkedCases: 0, matchedCaseIds: [], evidence: [] }, retryRaw = null) {
   const lines = [], diagnostics = createReviewDiagnostics((line) => lines.push(line));
-  const fetcher = vi.fn().mockResolvedValueOnce(Response.json(raw)).mockResolvedValueOnce(Response.json(assessmentResponse()));
+  const fetcher = vi.fn().mockResolvedValueOnce(Response.json(raw));
+  if (retryRaw) fetcher.mockResolvedValueOnce(Response.json(retryRaw));
+  fetcher.mockResolvedValueOnce(Response.json(assessmentResponse()));
   const registryRetriever = vi.fn().mockResolvedValue(registry);
   const response = await reviewWithMeta(input, { apiKey: "synthetic-test-key", fetcher, registryRetriever, diagnostics });
   diagnostics.finish(response);
@@ -16,21 +19,22 @@ async function review(raw, registry = { state: "available", checkedCases: 0, mat
 function message(raw) { return raw.output.find((item) => item.type === "message"); }
 
 describe("production citation reliability boundaries", () => {
-  it("reproduces eight completed searches with zero annotations and stops before registry or assessment", async () => {
+  it("reproduces eight completed searches with zero annotations, retries once and stops before registry or assessment", async () => {
     const raw = researchResponse({ citations: false });
     const search = raw.output.find((item) => item.type === "web_search_call");
     raw.output = [...Array.from({ length: 8 }, (_, index) => ({ ...search, id: `search_${index}` })), message(raw)];
     message(raw).phase = "final_answer";
-    const value = await review(raw);
+    const value = await review(raw, undefined, raw);
     expect(value.response).toMatchObject({ state: "incomplete", issue: { code: "insufficient_sources" } });
     expect(value.events.find((event) => event.event === "provider_finished")).toMatchObject({ providerStatus: "completed", searches: { completed: 8 }, citationAnnotations: 0, acceptedSources: 0, messages: { final: 1, commentary: 0, commentaryCitations: 0 } });
     expect(value.events.at(-1).category).toBe("missing_citations");
-    expect(value.fetcher).toHaveBeenCalledTimes(1); expect(value.registryRetriever).not.toHaveBeenCalled();
+    expect(value.events.filter((event) => event.event === "research_retried")).toEqual([expect.objectContaining({ reason: "missing_citations" })]);
+    expect(value.fetcher).toHaveBeenCalledTimes(2); expect(value.registryRetriever).not.toHaveBeenCalled();
   });
   it("keeps commentary-only citations separate from a citation-free final answer", async () => {
     const raw = researchResponse(); const commentary = message(raw); commentary.phase = "commentary";
     raw.output.push({ ...commentary, id: "final_message", phase: "final_answer", content: [{ type: "output_text", text: "<creative_observations>[]</creative_observations>", annotations: [] }] });
-    const value = await review(raw);
+    const value = await review(raw, undefined, raw);
     expect(value.response.state).toBe("incomplete"); expect(value.events.at(-1).category).toBe("missing_citations");
     const summary = createLogSummary(); for (const line of value.lines) summary.addLine(line);
     expect(summary.result().reviews[0].stages.research.messages).toEqual({ final: 1, commentary: 1, unknownPhase: 0, commentaryCitations: 1 });
