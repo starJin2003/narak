@@ -1,8 +1,8 @@
 # NARAK
 
-NARAK helps Korean marketing teams check what a poster, its ad copy and its planned publication date could mean in South Korean cultural context before the campaign runs. It researches cited public sources, checks a registry of documented cases and shows each finding on the poster with its evidence trail. It never gives a risk score and never approves a campaign.
+NARAK helps Korean marketing teams check what a poster, its ad copy and its planned publication date could mean in South Korean cultural context before the campaign runs. It researches cited public sources, checks a registry of documented cases and shows each finding with its evidence trail. Findings about visible elements are also marked on the poster. It never gives a risk score and never approves a campaign.
 
-NARAK was built for the Meta Global AI Developer Hackathon. The live site is at https://www.narakcheck.com/, and the three minute demo video is at [demo video](https://drive.google.com/file/d/1D2apsJObOEJmUGmvdtQHTzIPxdkZlxw4/view?usp=sharing).
+NARAK was built for the Meta Global AI Developer Hackathon. The live site is at https://www.narakcheck.com/, and the [demo video](https://youtu.be/ka3Qh4yTSs8) runs 2 minutes 42 seconds.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
