@@ -2,7 +2,7 @@
 
 NARAK helps Korean marketing teams check what a poster, its ad copy and its planned publication date could mean in South Korean cultural context before the campaign runs. It researches cited public sources, checks a registry of documented cases and shows each finding on the poster with its evidence trail. It never gives a risk score and never approves a campaign.
 
-NARAK was built for the Meta Global AI Developer Hackathon. The live site is at https://narak-gamma.vercel.app/, and the three minute demo video is at [DEMO VIDEO LINK TO ADD](#).
+NARAK was built for the Meta Global AI Developer Hackathon. The live site is at https://www.narakcheck.com/, and the three minute demo video is at [demo video](https://drive.google.com/file/d/1D2apsJObOEJmUGmvdtQHTzIPxdkZlxw4/view?usp=sharing).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
@@ -56,7 +56,7 @@ A review that stops early is shown as incomplete, unavailable or failed, and nev
 
 ## What was built during the hackathon
 
-The build period ran from 27 October to 4 November 2026. The public Git history records the work in eight commits on 3 and 4 November 2026.
+The build period ran from 27 October to 4 November 2026. The public Git history records the work in commits made on 3 and 4 November 2026.
 
 | Date | Commit | What it added |
 | --- | --- | --- |
@@ -149,7 +149,7 @@ After the streaming interface was added, two more live reviews on 4 November 202
 
 ## Sample and demo assets
 
-The four sample posters in `public/samples` are generated fictional assets for invented brands (Dalbit Mart, Lumen Quest, Bori Bakery and Northline). Two of them echo documented controversies on purpose so a reviewer can see a finding. Choosing a sample only fills the form, and its result always comes from a live review. The opening scenes of the demo video are generated fictional scenes. Images in the automated tests are synthetic and are generated while the tests run.
+The four sample posters in `public/samples` are generated fictional assets for invented brands (Dalbit Mart, Lumen Quest, Bori Bakery and Northline). Two of them echo documented controversies on purpose so a reviewer can see a finding. Choosing a sample only fills the form, and its result always comes from a live review. The opening scenes of the demo video are generated fictional scenes. The demo video also shows one more generated fictional poster for an invented brand, and that poster is not in the repository. Images in the automated tests are synthetic and are generated while the tests run.
 
 ## License and third party notices
 
